@@ -10,8 +10,11 @@ test('the site is static: no Worker code is deployed', () => {
 	const config = readFileSync(join(root, 'wrangler.toml'), 'utf8');
 	assert.doesNotMatch(config, /^\s*main\s*=/m, 'wrangler.toml must not set main');
 	assert.doesNotMatch(config, /run_worker_first/, 'wrangler.toml must not run a Worker first');
-	// Every deploy builds first, whatever build command Workers Builds is given.
-	assert.match(config, /^\[build\]\ncommand = "npm run build"$/m);
+	// Every deploy tests and builds first, whatever build command Workers Builds is given.
+	assert.match(config, /^\[build\]\ncommand = "npm test && npm run build"$/m);
+	// And the tests fetch the fixtures they replay.
+	const scripts = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts;
+	assert.equal(scripts.pretest, 'git submodule update --init');
 	assert.match(config, /^directory = "\.\/build"$/m);
 });
 

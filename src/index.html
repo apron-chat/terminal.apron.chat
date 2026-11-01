@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Apron terminal</title>
+	<meta name="description" content="Watch a program's output live, as an Apron chat shows it.">
+	<meta property="og:title" content="Apron terminal">
+	<meta property="og:description" content="Watch this program's output live.">
+	<meta property="og:site_name" content="Apron">
+	<meta name="theme-color" content="#15151f" media="(prefers-color-scheme: dark)">
+	<meta name="theme-color" content="#f8f6f3" media="(prefers-color-scheme: light)">
+	<link rel="icon" href="/logo.svg" type="image/svg+xml">
+	<link rel="stylesheet" href="/xterm.css">
+	<link rel="stylesheet" href="/style.css">
+	<script type="module" src="/app.js"></script>
+</head>
+<body>
+	<header class="bar">
+		<a href="/" class="brand" aria-label="Apron terminal"><img src="/logo.svg" alt="" width="24" height="24"></a>
+		<div class="heading">
+			<h1 id="title" dir="auto">Apron terminal</h1>
+			<p id="source" class="source" hidden></p>
+		</div>
+		<span id="status" class="status" role="status" hidden></span>
+		<button id="copy" class="button" type="button" hidden>Copy</button>
+	</header>
+	<main id="app" class="app" tabindex="-1">
+		<noscript>
+			<section class="card">
+				<h2>This page needs JavaScript</h2>
+				<p>It reads the stream's address, which stays in your browser after the <code>#</code>, and draws the output as a terminal would.</p>
+			</section>
+		</noscript>
+	</main>
+</body>
+</html>

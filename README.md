@@ -206,14 +206,32 @@ change how terminals look or read in one place, change the other to match.
 
 ## Deploying
 
-The site is a Cloudflare Worker with static assets only, like link.apron.chat.
+The site is a Cloudflare Worker with static assets only, like link.apron.chat:
+the Worker `terminal-apron-chat`, on the custom domain `terminal.apron.chat`.
 `wrangler.toml` has no `main`, so no Worker code runs, and `npm test` fails if
 one is added.
 
-One-time setup:
+Workers Builds deploys it on every push to `main`, which is to say on every
+merge. Other branches, such as a pull request's, get a preview at
+`<branch>-terminal-apron-chat.shazow.workers.dev`.
 
-1. In the Cloudflare dashboard, create a Worker from this repository with
-   Workers Builds.
-2. Set the build command to `npm ci && npm run build`, and the deploy command
-   to `npx wrangler deploy`.
-3. The custom domain `terminal.apron.chat` comes from `wrangler.toml`.
+One-time setup, in the Cloudflare dashboard:
+
+1. **Workers & Pages** → **Create** → **Import a repository**, and choose
+   `apron-chat/terminal.apron.chat`.
+2. Set the project name to `terminal-apron-chat`. It must match `name` in
+   `wrangler.toml`.
+3. Set **Build command** to `npm test && npm run build`. Workers Builds
+   installs the dependencies itself (`npm ci`, with the npm version in
+   `packageManager`), and a failing test stops the deploy.
+4. Leave **Deploy command** as `npx wrangler deploy`, the production branch as
+   `main`, and builds for non-production branches on.
+5. Deploy. The first deploy creates the custom domain `terminal.apron.chat`
+   (from `routes` in `wrangler.toml`) and its DNS record.
+
+To check the config without deploying:
+
+```sh
+npm run build && npx wrangler deploy --dry-run   # reads build/, parses _headers
+npx wrangler dev                                 # serves build/ as Cloudflare does, at http://localhost:8787
+```

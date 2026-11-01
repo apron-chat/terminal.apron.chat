@@ -99,10 +99,12 @@ that already exist, rather than one of its own:
   asciicast replays at its own pace, with pauses cut to its `idle_time_limit`
   (2 seconds without one), and **Skip** shows the end. It keeps its own
   terminal size. Any other file shows as a terminal's output, such as a
-  finished embed's `output`. A file stays in your browser.
+  finished embed's `output`, and keeps its last part, as an embed does. A
+  file stays in your browser.
 
 It opens asciicasts of version 3 only, which asciinema 3 records; `asciinema
-convert` converts older ones. A long stream is recorded up to about 1 MB of
+convert` converts older ones. A recording that was interrupted opens up to its
+last whole line. A long stream is recorded up to about 1 MB of
 output; past that, the recording keeps the last part, as servers do. Save
 isn't offered in a frame, where Open leads to the full page.
 

@@ -353,11 +353,6 @@ export class TerminalScreen {
 		return rows;
 	}
 
-	/** Its columns and rows. */
-	get size() {
-		return this.#size;
-	}
-
 	/**
 	 * Scrolls by `pixels` (down if positive) through all there is to see as
 	 * one: the lines kept above the screen, then the screen, which its space

@@ -49,7 +49,6 @@ test('embed and theme', () => {
 test('a recording to replay, in place of a stream', () => {
 	assert.deepEqual(at('#cast=https://asciinema.org/a/335480.cast&title=demo'), { kind: 'view', view: { url: 'https://asciinema.org/a/335480.cast', host: 'asciinema.org', cast: true, title: 'demo', embed: false } });
 	// A stream wins over a recording.
-	assert.equal(at('#cast=https://a.example/x.cast&stream=https://b.example/t/1').kind === 'view' && 'url', 'url');
 	const both = at('#cast=https://a.example/x.cast&stream=https://b.example/t/1');
 	assert.deepEqual(both.kind === 'view' && [both.view.url, both.view.cast], ['https://b.example/t/1', undefined]);
 	// The same checks as a stream.

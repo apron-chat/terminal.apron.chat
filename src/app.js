@@ -21,8 +21,8 @@
 import { Terminal } from './xterm.mjs';
 import { followLiveText, liveTextDecoder } from './live.js';
 import { EMBED_SIZE, INLINE_FIT, SCROLLBACK, TerminalScreen, VIEWER_FIT } from './screen.js';
-import { CAST_TYPE, parseRecording, Recorder, replayDelays, writeCast, writeGolden } from './formats.js';
-import { checkStreamUrl, isLoopback, parseLocation, viewerUrl } from './stream.js';
+import { CAST_TYPE, dueUntil, parseRecording, readLimited, Recorder, replayTimes, writeCast, writeGolden } from './formats.js';
+import { checkStreamUrl, cleanTitle, isLoopback, parseLocation, viewerUrl } from './stream.js';
 import { isFramed, outputOf, READY, reportHeight, watchSight } from './embed.js';
 
 /** @typedef {import('./stream.js').Reason} Reason */
@@ -388,33 +388,45 @@ async function showCast(view, embed) {
 	const from = 'Recording from';
 	setBar({ ...(view.title ? { title: view.title } : {}), host, from, status: { text: 'Loading…', state: 'connecting' } });
 	app.replaceChildren();
+	if (embed) {
+		// The full page, in a tab of its own, with Save.
+		openLink.href = viewerUrl(location.origin, { url, cast: true, ...(view.title ? { title: view.title } : {}), ...(view.theme ? { theme: view.theme } : {}) });
+		openLink.hidden = false;
+	}
 	const controller = new AbortController();
 	teardown = () => controller.abort();
+	/** Whether the page has moved on to something else since. */
+	const stale = () => controller.signal.aborted || shownKey !== key;
 	/** @param {string} text */
 	const fail = (text) => {
+		if (stale()) return;
 		setBar({ ...(view.title ? { title: view.title } : {}), host, from, status: { text: 'Unavailable', state: 'failed' } });
 		app.replaceChildren(h('p', { class: 'note' }, text));
 	};
+	const tooLarge = 'This recording is too large to open here.';
 	let text;
 	try {
 		const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal });
 		if (!response.ok) return fail(`${host} answered ${response.status} for this recording.`);
-		if (Number(response.headers.get('Content-Length')) > MAX_RECORDING) return fail('This recording is too large to open here.');
-		text = await response.text();
+		if (Number(response.headers.get('Content-Length')) > MAX_RECORDING) {
+			void response.body?.cancel().catch(() => {});
+			return fail(tooLarge);
+		}
+		// Without a Content-Length, or with a wrong one, it stops reading past the bound.
+		text = await readLimited(response.body, MAX_RECORDING);
 	} catch {
-		if (controller.signal.aborted) return;
 		return fail(`Couldn't load this recording from ${host}. It may not let other sites read it.`);
 	}
-	if (shownKey !== key) return;
+	if (text === undefined) return fail(tooLarge);
+	if (stale()) return;
 	/** @type {Recording} */
 	let recording;
 	try {
-		if (text.length > MAX_RECORDING) throw new Error('This recording is too large to open here.');
 		recording = parseRecording(text);
 	} catch (error) {
 		return fail(error instanceof Error ? error.message : String(error));
 	}
-	const title = view.title ?? recording.title;
+	const title = view.title ?? cleanTitle(recording.title ?? '');
 	showRecording(recording, { ...(title ? { title } : {}), host, from }, embed);
 }
 
@@ -439,8 +451,10 @@ async function openFile(file) {
 	if (location.hash) history.pushState(null, '', location.pathname);
 	clear();
 	shownKey = `file:${file.name}`;
-	root.removeAttribute('data-embed');
-	showRecording(recording, { title: recording.title ?? file.name, host: file.name, from: 'Opened from' }, false);
+	// In a frame, the compact layout still.
+	root.toggleAttribute('data-embed', framed);
+	const name = cleanTitle(file.name) || 'a file';
+	showRecording(recording, { title: cleanTitle(recording.title ?? '') || name, host: name, from: 'Opened from' }, framed);
 }
 
 /**
@@ -466,6 +480,7 @@ function showRecording(recording, { title, host, from }, embed) {
 	};
 	/** @type {ReturnType<typeof setTimeout> | undefined} */
 	let timer;
+	/** The first event not yet shown. */
 	let next = 0;
 	const skip = () => {
 		clearTimeout(timer);
@@ -480,17 +495,24 @@ function showRecording(recording, { title, host, from }, embed) {
 		dispose();
 	};
 	if (recording.format !== 'asciicast' || recording.events.length < 2) return skip();
-	const delays = replayDelays(recording);
+	const times = replayTimes(recording);
 	skipButton.hidden = false;
 	copyButton.hidden = false;
 	bar({ text: 'Replaying', state: 'live', detail });
-	const step = () => {
-		screen.write(recording.events[next][1]);
-		next++;
+	// Against the clock, not a timer per event: each tick shows every event that is due, in one write, so many
+	// events close together (or a tab that held its timers back) don't fall behind.
+	const started = performance.now();
+	const tick = () => {
+		const elapsed = performance.now() - started;
+		const due = dueUntil(times, next, elapsed);
+		if (due > next) {
+			screen.write(recording.events.slice(next, due).map(([, text]) => text).join(''));
+			next = due;
+		}
 		if (next >= recording.events.length) return finish();
-		timer = setTimeout(step, delays[next]);
+		timer = setTimeout(tick, Math.max(0, times[next] - elapsed));
 	};
-	timer = setTimeout(step, delays[0]);
+	timer = setTimeout(tick, times[0]);
 }
 
 /**
@@ -545,7 +567,9 @@ async function copyText(text) {
 addEventListener('hashchange', render);
 // Going back to the link after opening a file shows it again.
 addEventListener('popstate', () => {
-	shownKey = '';
+	// Only after a file: the address didn't say what it showed. A change of fragment (popstate fires for it too, in
+	// some browsers) is render's to compare, so a change of theme alone keeps what is shown.
+	if (shownKey.startsWith('file:')) shownKey = '';
 	render();
 });
 saveMenu.addEventListener('click', (event) => {

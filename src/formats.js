@@ -44,31 +44,47 @@ export const GOLDEN_SEPARATOR = '─'.repeat(TERMINAL_COLS);
 export const CAST_TYPE = 'application/x-asciicast';
 
 /**
- * Reads a recording: an asciicast of version 3, or else a terminal's output.
- * Throws for an asciicast of another version, or one that breaks the format.
+ * Reads a recording: an asciicast of version 3, or else a terminal's output,
+ * of which it keeps the last part, as of a finished embed's
+ * (`OUTPUT_KEEP`). Throws for an asciicast of another version, or one that
+ * breaks the format.
  * @param {string} text
  * @returns {Recording}
  */
 export function parseRecording(text) {
-	const body = text.replace(/^﻿/, '');
-	return (/^\s*\{/.test(body) ? parseCast(body) : undefined) ?? { format: 'output', size: EMBED_SIZE, events: [[0, text]] };
+	const body = text.replace(/^\uFEFF/, '');
+	return parseCast(body) ?? { format: 'output', size: EMBED_SIZE, events: [[0, keepLast(body, OUTPUT_KEEP)]] };
 }
 
 /**
  * An asciicast of version 3, or undefined for text that isn't an asciicast:
  * a header line, then a line per event, `[interval, code, data]`, each
- * interval in seconds from the event before.
+ * interval in seconds from the event before. Blank lines and comments (`#`)
+ * are skipped, before the header too. A last line that isn't JSON, as an
+ * interrupted recording leaves, is left out; any other is an error. An older
+ * asciicast, including version 1's single JSON object over many lines, is an
+ * error that says how to convert it.
  * @param {string} text
  * @returns {Recording | undefined}
  */
 export function parseCast(text) {
-	const lines = text.split(/\r?\n/);
+	const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+	const content = (/** @type {string} */ line) => line.trim() !== '' && !line.trim().startsWith('#');
+	const first = lines.findIndex(content);
+	if (first === -1 || !lines[first].trim().startsWith('{')) return undefined;
 	/** @type {unknown} */
 	let header;
+	let rest = first + 1;
 	try {
-		header = JSON.parse(lines[0]);
+		header = JSON.parse(lines[first]);
 	} catch {
-		return undefined;
+		// A header over many lines: version 1 is one JSON object, often pretty-printed.
+		try {
+			header = JSON.parse(lines.slice(first).join('\n'));
+		} catch {
+			return undefined;
+		}
+		rest = lines.length;
 	}
 	if (!isObject(header) || typeof header.version !== 'number') return undefined;
 	if (header.version !== 3) {
@@ -79,24 +95,29 @@ export function parseCast(text) {
 	/** @type {OutputEvent[]} */
 	const events = [];
 	let carried = 0;
-	for (let i = 1; i < lines.length; i++) {
+	let last = lines.length - 1;
+	while (last >= rest && !content(lines[last])) last--;
+	for (let i = rest; i <= last; i++) {
 		const line = lines[i].trim();
-		if (!line || line.startsWith('#')) continue;
+		if (!content(line)) continue;
 		/** @type {unknown} */
 		let event;
 		try {
 			event = JSON.parse(line);
 		} catch {
+			// Cut off, as a recording that was interrupted leaves its last line.
+			if (i === last) break;
 			throw new Error(`Line ${i + 1} of the asciicast isn't JSON.`);
 		}
 		if (!Array.isArray(event) || event.length < 3 || typeof event[0] !== 'number' || !Number.isFinite(event[0]) || typeof event[1] !== 'string') {
 			throw new Error(`Line ${i + 1} of the asciicast isn't an event.`);
 		}
 		const interval = Math.max(0, event[0]);
-		if (event[1] !== 'o' || typeof event[2] !== 'string') {
+		if (event[1] !== 'o') {
 			carried += interval;
 			continue;
 		}
+		if (typeof event[2] !== 'string') throw new Error(`Line ${i + 1} of the asciicast is output that isn't text.`);
 		events.push([interval + carried, event[2]]);
 		carried = 0;
 	}
@@ -165,12 +186,55 @@ export function writeGolden(rows) {
 }
 
 /**
- * The pauses to replay a recording with, in ms: each event's interval, but
- * none longer than its idle limit, as asciinema replays it.
+ * When to show each event of a recording as it replays, in ms from the
+ * start: the sum of the intervals up to it, each no longer than its idle
+ * limit, as asciinema replays it.
  * @param {Pick<Recording, 'events' | 'idleLimit'>} recording
  */
-export function replayDelays({ events, idleLimit = DEFAULT_IDLE_LIMIT }) {
-	return events.map(([interval]) => Math.round(Math.min(interval, idleLimit) * 1000));
+export function replayTimes({ events, idleLimit = DEFAULT_IDLE_LIMIT }) {
+	let at = 0;
+	return events.map(([interval]) => {
+		at += Math.min(interval, idleLimit);
+		return Math.round(at * 1000);
+	});
+}
+
+/**
+ * How far a replay has got `elapsed` ms after its start: the index of the
+ * first event not yet due, from `next`, the first not yet shown. Every event
+ * from `next` up to it is due, to show at once.
+ * @param {number[]} times each event's time, from `replayTimes`
+ * @param {number} next
+ * @param {number} elapsed
+ */
+export function dueUntil(times, next, elapsed) {
+	let i = next;
+	while (i < times.length && times[i] <= elapsed) i++;
+	return i;
+}
+
+/**
+ * The text of a response body, decoded as UTF-8, or undefined once it
+ * passes `limit` bytes, when it stops reading.
+ * @param {ReadableStream<Uint8Array> | null} body
+ * @param {number} limit
+ */
+export async function readLimited(body, limit) {
+	if (!body) return '';
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let length = 0;
+	let text = '';
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) return text + decoder.decode();
+		length += value.byteLength;
+		if (length > limit) {
+			void reader.cancel().catch(() => {});
+			return undefined;
+		}
+		text += decoder.decode(value, { stream: true });
+	}
 }
 
 /**
@@ -215,9 +279,11 @@ export class Recorder {
 		this.#last = now;
 		this.#length += text.length;
 		if (this.#length > this.#limit) {
+			// The recording starts again from the cut: the text kept, all at once.
 			const kept = keepLast(this.#events.map(([, t]) => t).join(''), OUTPUT_KEEP);
 			this.#events = [[0, kept]];
 			this.#length = kept.length;
+			this.#started = now;
 		}
 	}
 

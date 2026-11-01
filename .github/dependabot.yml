@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # protocol/ pins shazow/apron, which owns PROTOCOL.md and the terminal fixtures.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly

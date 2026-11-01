@@ -213,8 +213,9 @@ You need Node 22 or later. The only dependency is xterm.js, pinned to the
 version that apron-web uses.
 
 ```sh
+git submodule update --init   # or clone with --recurse-submodules
 npm ci
-npm test               # link parsing, stream reading, screen sizing, and build checks
+npm test               # link parsing, stream reading, screen sizing, the terminal fixtures, and build checks
 npm run dev            # build, then serve at http://localhost:8789 with production's headers, plus localhost streams
 DEMO=1 npm run dev     # the same, with a demo stream at /demo (scripts/demo.mjs) and a link to view it
 npm run build          # write the site to build/
@@ -230,6 +231,24 @@ npm run build          # write the site to build/
 | `scripts/demo.mjs` | the demo run: colors, a banner, progress bars and a table, as a program writes them |
 | `scripts/screenshot.mjs` | takes `docs/screenshot.png` and `docs/embed.png` of the demo, live |
 | `scripts/build.mjs` | builds `build/`: the page, `xterm.mjs` and `xterm.css` from `node_modules`, and `_headers` |
+
+### Terminal fixtures
+
+`npm test` replays the terminal fixtures in shazow/apron
+([`tests/fixtures/terminal.json`](https://github.com/shazow/apron/blob/main/tests/fixtures/terminal.json)):
+outputs, and the screens that clients show for them (PROTOCOL.md §4.8.6).
+`test/fixtures.test.mjs` writes each one to a headless xterm.js
+(`@xterm/headless`), made with the same options and the same handlers for
+titles and the clipboard as the page's screen (`behaviorOptions` and
+`swallowOutsideControls` in `src/screen.js`), then compares the screen.
+It writes each case twice: all at once, and a character at a time, as a live
+stream may split it anywhere.
+
+The fixtures come from the `protocol` submodule, pinned to a commit.
+Dependabot opens a pull request when it moves, so CI runs the page against new
+fixtures before they're adopted. To update by hand, run
+`git -C protocol fetch origin main`, check out the commit you want, and commit
+`protocol`.
 
 `src/live.js` and `src/screen.js` follow apron-web's
 `src/lib/protocol/live-text.ts` and `src/lib/ui/terminal-screen.ts`. When you
@@ -248,6 +267,9 @@ node scripts/screenshot.mjs
 
 ## Deploying
 
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `npm test` on
+every pull request and on `main`, with the `protocol` submodule.
+
 The site is a Cloudflare Worker with static assets only, like link.apron.chat:
 the Worker `terminal-apron-chat`, on the custom domain `terminal.apron.chat`.
 `wrangler.toml` has no `main`, so no Worker code runs, and `npm test` fails if
@@ -263,11 +285,11 @@ One-time setup, in the Cloudflare dashboard:
    `apron-chat/terminal.apron.chat`.
 2. Set the project name to `terminal-apron-chat`. It must match `name` in
    `wrangler.toml`.
-3. Set **Build command** to `npm test`, so a failing test stops the deploy.
-   Workers Builds installs the dependencies itself (`npm ci`, with the npm
-   version in `packageManager`), and Wrangler builds the site before it
-   deploys (`[build]` in `wrangler.toml`), so the build command can also be
-   left empty.
+3. Set **Build command** to `git submodule update --init && npm test`, as
+   apron-web's is: the tests need the fixtures in `protocol/`, and a failing
+   test stops the deploy. Workers Builds installs the dependencies itself
+   (`npm ci`, with the npm version in `packageManager`), and Wrangler builds
+   the site before it deploys (`[build]` in `wrangler.toml`).
 4. Leave **Deploy command** as `npx wrangler deploy`, the production branch as
    `main`, and builds for non-production branches on.
 5. Deploy. The first deploy creates the custom domain `terminal.apron.chat`

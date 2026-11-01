@@ -65,6 +65,36 @@ export function keepLast(text, limit) {
 }
 
 /**
+ * The options that decide what the screen holds, as opposed to how it looks:
+ * the size, line feeds, and the lines it keeps above the screen. The tests
+ * replay shazow/apron's terminal fixtures through a headless xterm made with
+ * these (test/fixtures.test.mjs).
+ * @param {number} [scrollback]
+ */
+export function behaviorOptions(scrollback = 0) {
+	return {
+		cols: TERMINAL_COLS,
+		rows: TERMINAL_ROWS,
+		// A line feed also returns to the first column (§4.8.6): output piped without a pseudo-terminal ends lines with
+		// a bare line feed, which a terminal's driver would turn into CR LF.
+		convertEol: true,
+		scrollback,
+		// No window manipulation or reports (the default, stated).
+		windowOptions: {}
+	};
+}
+
+/**
+ * Swallows the control functions that would act outside the screen (§4.8.6):
+ * window titles (OSC 0, 1, 2) and the clipboard (OSC 52). They are parsed and
+ * dropped, never shown or performed.
+ * @param {Pick<Terminal, 'parser'>} terminal
+ */
+export function swallowOutsideControls(terminal) {
+	for (const osc of [0, 1, 2, 52]) terminal.parser.registerOscHandler(osc, () => true);
+}
+
+/**
  * The options its xterm is made with; `scrollback`, the lines it keeps above the screen.
  * @param {ITheme} theme
  * @param {string} fontFamily
@@ -74,20 +104,14 @@ export function keepLast(text, limit) {
  */
 export function terminalOptions(theme, fontFamily, fontSize, scrollback = 0) {
 	return {
-		cols: TERMINAL_COLS,
-		rows: TERMINAL_ROWS,
+		...behaviorOptions(scrollback),
 		// Read-only: nothing typed reaches it, and no cursor of its own blinks.
 		disableStdin: true,
 		cursorBlink: false,
 		cursorStyle: 'block',
 		cursorInactiveStyle: 'none',
-		// Output piped without a pseudo-terminal ends lines with a bare line feed, which a terminal's driver would turn into CR LF.
-		convertEol: true,
-		scrollback,
 		// OSC 8 links are shown, never opened.
 		linkHandler: { activate: () => {}, allowNonHttpProtocols: false },
-		// No window manipulation or reports (the default, stated).
-		windowOptions: {},
 		fontFamily,
 		fontSize,
 		lineHeight: 1,
@@ -231,8 +255,7 @@ export class TerminalScreen {
 		({ advance: this.#ratio, line: this.#line } = faceRatios(host, fontFamily));
 		const room = this.#room();
 		const terminal = new Terminal(terminalOptions(terminalTheme(host), fontFamily, terminalFontSize(room.width, this.#ratio, fit, room.height, this.#line), scrollback));
-		// Swallowed, not acted on: window titles (OSC 0, 1, 2) and the clipboard (OSC 52).
-		for (const osc of [0, 1, 2, 52]) terminal.parser.registerOscHandler(osc, () => true);
+		swallowOutsideControls(terminal);
 		// No key is xterm's once a click has focused it: the arrows and Page Up reach the page, and copying is the browser's.
 		terminal.attachCustomKeyEventHandler(() => false);
 		const screen = document.createElement('div');

@@ -345,14 +345,6 @@ export class TerminalScreen {
 		return lines.join('\n');
 	}
 
-	/** Every row of the screen as it is now, from the top, each without trailing spaces: a frame, as VHS writes one. */
-	screenRows() {
-		const buffer = this.#terminal.buffer.active;
-		const rows = [];
-		for (let y = 0; y < this.#size.rows; y++) rows.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '');
-		return rows;
-	}
-
 	/**
 	 * Scrolls by `pixels` (down if positive) through all there is to see as
 	 * one: the lines kept above the screen, then the screen, which its space

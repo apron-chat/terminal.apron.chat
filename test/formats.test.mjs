@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_IDLE_LIMIT, dueUntil, GOLDEN_SEPARATOR, parseCast, parseRecording, readLimited, Recorder, replayTimes, writeCast, writeGolden } from '../src/formats.js';
+import { DEFAULT_IDLE_LIMIT, dueUntil, parseCast, parseRecording, readLimited, Recorder, replayTimes, writeCast } from '../src/formats.js';
 import { keepLast, OUTPUT_KEEP } from '../src/screen.js';
 
 const HEADER = JSON.stringify({ version: 3, term: { cols: 80, rows: 24 } });
@@ -39,12 +39,6 @@ test('asciicasts that break the format say how', () => {
 	// Not an asciicast at all: undefined, and parseRecording reads it as output.
 	assert.equal(parseCast('{"hello": "world"}'), undefined);
 	assert.equal(parseRecording('{"hello": "world"}').format, 'output');
-});
-
-test('writeGolden writes a frame as VHS does: each row trimmed, then 80 ─', () => {
-	const rows = ['$ make  ', 'ok', '', ''];
-	assert.equal(writeGolden(rows), `$ make\nok\n\n\n${GOLDEN_SEPARATOR}\n`);
-	assert.equal(GOLDEN_SEPARATOR, '─'.repeat(80));
 });
 
 test('anything that is not an asciicast is output', () => {

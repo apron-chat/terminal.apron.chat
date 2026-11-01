@@ -7,8 +7,7 @@
  *
  * It also replays recordings in other tools' formats, and saves in them
  * (src/formats.js): an asciicast from `#cast=<url>`, or any file opened or
- * dropped on the page; the output it shows, as an asciicast or a VHS golden
- * file.
+ * dropped on the page; the output it shows, as an asciicast.
  *
  * In an iframe, or with `embed=1`, it is a terminal embed in a chat message:
  * a slim bar and a screen that shows only the rows written, with no
@@ -21,7 +20,7 @@
 import { Terminal } from './xterm.mjs';
 import { followLiveText, liveTextDecoder } from './live.js';
 import { EMBED_SIZE, INLINE_FIT, SCROLLBACK, TerminalScreen, VIEWER_FIT } from './screen.js';
-import { CAST_TYPE, dueUntil, parseRecording, readLimited, Recorder, replayTimes, writeCast, writeGolden } from './formats.js';
+import { CAST_TYPE, dueUntil, parseRecording, readLimited, Recorder, replayTimes, writeCast } from './formats.js';
 import { checkStreamUrl, cleanTitle, isLoopback, parseLocation, viewerUrl } from './stream.js';
 import { isFramed, outputOf, READY, reportHeight, watchSight } from './embed.js';
 
@@ -53,7 +52,7 @@ const statusElement = /** @type {HTMLElement} */ (document.getElementById('statu
 const copyButton = /** @type {HTMLButtonElement} */ (document.getElementById('copy'));
 const openLink = /** @type {HTMLAnchorElement} */ (document.getElementById('open'));
 const skipButton = /** @type {HTMLButtonElement} */ (document.getElementById('skip'));
-const saveMenu = /** @type {HTMLDetailsElement} */ (document.getElementById('save'));
+const saveButton = /** @type {HTMLButtonElement} */ (document.getElementById('save'));
 const root = document.documentElement;
 const brandLink = /** @type {HTMLAnchorElement} */ (document.querySelector('.brand'));
 const framed = isFramed(window);
@@ -78,8 +77,8 @@ let receiveOutput = (/** @type {string} */ _output) => {};
 /** What the page shows now, but for its theme: a change of theme alone doesn't start it afresh. */
 let shownKey = '';
 /**
- * What Save writes, for what the page shows now: its recording so far, and its screen's rows.
- * @type {{ title?: string, size: TerminalSize, recorded: () => Pick<Recording, 'events' | 'timestamp'>, rows: () => string[] } | undefined}
+ * What Save writes, for what the page shows now: its recording so far.
+ * @type {{ title?: string, size: TerminalSize, recorded: () => Pick<Recording, 'events' | 'timestamp'> } | undefined}
  */
 let saving;
 
@@ -148,8 +147,7 @@ function clear() {
 	teardown = () => {};
 	receiveOutput = () => {};
 	saving = undefined;
-	for (const control of [copyButton, openLink, skipButton, saveMenu]) control.hidden = true;
-	saveMenu.open = false;
+	for (const control of [copyButton, openLink, skipButton, saveButton]) control.hidden = true;
 }
 
 /**
@@ -243,7 +241,7 @@ function showView(view, embed) {
 
 	const { screen, screenHost, stage, showNote, dispose } = mountScreen(embed, EMBED_SIZE);
 	const recorder = new Recorder();
-	saving = { ...(view.title ? { title: view.title } : {}), size: EMBED_SIZE, recorded: () => recorder.recorded, rows: () => screen.screenRows() };
+	saving = { ...(view.title ? { title: view.title } : {}), size: EMBED_SIZE, recorded: () => recorder.recorded };
 	/** Set once nothing more will come: the output ended, the server refused it, or the parent sent the output. */
 	let done = false;
 	/** @type {AbortController | undefined} The reading now, if any. */
@@ -267,7 +265,7 @@ function showView(view, embed) {
 		recorder.replace(output);
 		screenHost.hidden = false;
 		copyButton.hidden = !output;
-		saveMenu.hidden = embed || !output;
+		saveButton.hidden = embed || !output;
 		showNote(output ? undefined : 'The program ended without any output.');
 		bar({ text: 'Finished', state: 'ended', detail: 'The program\'s output has ended.' });
 	};
@@ -293,7 +291,7 @@ function showView(view, embed) {
 			chunk: (bytes) => {
 				received += bytes.byteLength;
 				copyButton.hidden = false;
-				saveMenu.hidden = embed;
+				saveButton.hidden = embed;
 				const text = decoder.decode(bytes, { stream: true });
 				recorder.add(text);
 				screen.write(text);
@@ -466,7 +464,7 @@ async function openFile(file) {
  */
 function showRecording(recording, { title, host, from }, embed) {
 	const { screen, showNote, dispose } = mountScreen(embed, recording.size);
-	saving = { ...(title ? { title } : {}), size: recording.size, recorded: () => recording, rows: () => screen.screenRows() };
+	saving = { ...(title ? { title } : {}), size: recording.size, recorded: () => recording };
 	/** @param {Status} status */
 	const bar = (status) => setBar({ ...(title ? { title } : {}), host, from, status });
 	const detail = `${recording.size.cols}×${recording.size.rows}`;
@@ -475,7 +473,7 @@ function showRecording(recording, { title, host, from }, embed) {
 		bar({ text: recording.format === 'asciicast' ? 'Replayed' : 'Output', state: 'ended', detail });
 		const empty = !recording.events.some(([, text]) => text);
 		copyButton.hidden = empty;
-		saveMenu.hidden = embed || empty;
+		saveButton.hidden = embed || empty;
 		if (empty) showNote('This recording has no output.');
 	};
 	/** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -515,21 +513,12 @@ function showRecording(recording, { title, host, from }, embed) {
 	timer = setTimeout(tick, times[0]);
 }
 
-/**
- * Saves what the page shows in a format of another tool's: an asciicast
- * (version 3) of the output so far, with its timing, or a VHS golden file of
- * the screen as it is.
- * @param {string} format `cast` or `golden`
- */
-function save(format) {
+/** Saves what the page shows as an asciicast (version 3): the output so far, with its timing. */
+function save() {
 	if (!saving) return;
 	const name = (saving.title ?? 'terminal').replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'terminal';
-	if (format === 'cast') {
-		const { events, timestamp } = saving.recorded();
-		download(`${name}.cast`, CAST_TYPE, writeCast({ size: saving.size, events, ...(saving.title ? { title: saving.title } : {}), ...(timestamp !== undefined ? { timestamp } : {}) }));
-	} else {
-		download(`${name}.txt`, 'text/plain', writeGolden(saving.rows()));
-	}
+	const { events, timestamp } = saving.recorded();
+	download(`${name}.cast`, CAST_TYPE, writeCast({ size: saving.size, events, ...(saving.title ? { title: saving.title } : {}), ...(timestamp !== undefined ? { timestamp } : {}) }));
 }
 
 /**
@@ -572,12 +561,7 @@ addEventListener('popstate', () => {
 	if (shownKey.startsWith('file:')) shownKey = '';
 	render();
 });
-saveMenu.addEventListener('click', (event) => {
-	const item = /** @type {HTMLElement | null} */ (event.target instanceof Element ? event.target.closest('[data-format]') : null);
-	if (!item) return;
-	save(item.dataset.format ?? '');
-	saveMenu.open = false;
-});
+saveButton.addEventListener('click', save);
 // A file dropped on the full page opens as a recording; a page in a chat message takes none.
 addEventListener('dragover', (event) => {
 	if (framed || !event.dataTransfer?.types.includes('Files')) return;

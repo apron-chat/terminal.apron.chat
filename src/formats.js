@@ -8,13 +8,10 @@
  *   output with its timing, to replay here or with asciinema, such as for a
  *   bug report. Output events (`o`) are kept; input, markers, resizes and
  *   exits are skipped, their time added to the next output.
- * - VHS golden files (charmbracelet/vhs, `Output golden.txt`), written: the
- *   screen as text, each row without trailing spaces, then a line of 80
- *   `─`, to compare in tests.
  * - Anything else read is a terminal's output, as a finished embed's
  *   `output` is.
  */
-import { EMBED_SIZE, keepLast, OUTPUT_KEEP, TERMINAL_COLS } from './screen.js';
+import { EMBED_SIZE, keepLast, OUTPUT_KEEP } from './screen.js';
 
 /** @typedef {import('./screen.js').TerminalSize} TerminalSize */
 
@@ -36,9 +33,6 @@ export const MAX_SIZE = /** @type {TerminalSize} */ ({ cols: 500, rows: 200 });
 
 /** The longest pause replayed when a recording sets none, in seconds. */
 export const DEFAULT_IDLE_LIMIT = 2;
-
-/** The line after each frame of a VHS golden file. */
-export const GOLDEN_SEPARATOR = '─'.repeat(TERMINAL_COLS);
 
 /** The type asciinema serves .cast files as. */
 export const CAST_TYPE = 'application/x-asciicast';
@@ -174,15 +168,6 @@ export function writeCast({ size, events, title, timestamp }) {
 		written = at;
 	}
 	return `${lines.join('\n')}\n`;
-}
-
-/**
- * A screen as one frame of a VHS golden file: each row, without trailing
- * spaces, then the separator.
- * @param {string[]} rows every row of the screen, from the top
- */
-export function writeGolden(rows) {
-	return `${rows.map((row) => `${row.trimEnd()}\n`).join('')}${GOLDEN_SEPARATOR}\n`;
 }
 
 /**

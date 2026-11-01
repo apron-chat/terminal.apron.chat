@@ -83,17 +83,13 @@ limits how many times a stream is read in all (15 to 30). Past that it answers
 
 ## Recordings
 
-The page saves what it shows, and opens it again, in the formats of tools
-that already exist, rather than one of its own:
+The page saves what it shows, and opens it again, in asciinema's format
+rather than one of its own:
 
-- **Save → asciicast** writes the output as it arrived, with its timing, as
+- **Save .cast** writes the output as it arrived, with its timing, as
   an [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/) (`.cast`):
   asciinema's recording format. Attach one to a bug report, replay it with
   `asciinema play`, or open it here.
-- **Save → VHS golden** writes the screen as it is now, as a
-  [VHS](https://github.com/charmbracelet/vhs) golden file (`.txt`): each row
-  without trailing spaces, then a line of 80 `─`. Compare it in tests, as VHS
-  users do.
 - **Opening** a recording: drop a file on the page, use **Open a file**, or
   link to one with `#cast=<https url>`, which is read as `stream` is. An
   asciicast replays at its own pace, with pauses cut to its `idle_time_limit`
@@ -254,7 +250,7 @@ npm run build          # write the site to build/
 | `src/live.js` | follows a stream: reads, reconnects, decodes |
 | `src/screen.js` | the terminal screen: xterm.js, fitted to the window or the frame, with or without scrollback |
 | `src/embed.js` | the page in an iframe: the messages it sends and takes |
-| `src/formats.js` | recordings: reads and writes asciicast v3, writes VHS golden files |
+| `src/formats.js` | recordings: reads and writes asciicast v3 |
 | `src/app.js` | the page |
 | `scripts/demo.mjs` | the demo run: colors, a banner, progress bars and a table, as a program writes them |
 | `scripts/screenshot.mjs` | takes `docs/screenshot.png` and `docs/embed.png` of the demo, live |

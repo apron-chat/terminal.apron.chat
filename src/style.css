@@ -424,59 +424,6 @@ code {
 	margin: var(--space-1) 0 0;
 }
 
-/* Save: a menu of formats, under its button. */
-.menu {
-	position: relative;
-	flex: none;
-}
-
-.menu > summary {
-	list-style: none;
-}
-
-.menu > summary::-webkit-details-marker {
-	display: none;
-}
-
-.menu-list {
-	position: absolute;
-	right: 0;
-	top: calc(100% + var(--space-1));
-	z-index: 10;
-	display: flex;
-	flex-direction: column;
-	min-width: 12rem;
-	padding: var(--space-1);
-	border: 1px solid var(--line);
-	border-radius: var(--radius-sm);
-	background: var(--bg-200);
-	box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
-}
-
-.menu-item {
-	display: flex;
-	justify-content: space-between;
-	gap: var(--space-3);
-	padding: var(--space-2) var(--space-3);
-	border: 0;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	color: var(--ink);
-	font: inherit;
-	font-size: var(--text-ui);
-	text-align: left;
-	cursor: pointer;
-}
-
-.menu-item:hover,
-.menu-item:focus-visible {
-	background: var(--bg-100);
-}
-
-.muted {
-	color: var(--ink-muted);
-}
-
 .open-file .button {
 	margin-right: var(--space-1);
 }

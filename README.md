@@ -1,6 +1,6 @@
 # terminal.apron.chat
 
-A stand-alone viewer for the live output of Apron `terminal` embeds
+Apron Embedded Terminal: a stand-alone viewer for the live output of Apron `terminal` embeds
 ([PROTOCOL.md §4.8.6](https://github.com/shazow/apron/blob/main/PROTOCOL.md#486-embedterminal)).
 Open a terminal in any browser, including from chat apps that can't show
 terminals themselves.

@@ -20,7 +20,7 @@ import { checkStreamUrl, parseLocation, viewerUrl } from './stream.js';
 const REPOSITORY = 'https://github.com/apron-chat/terminal.apron.chat';
 const PROTOCOL = 'https://github.com/shazow/apron/blob/main/PROTOCOL.md#486-embedterminal';
 /** The page's own name, and the title when the stream has none. */
-const NAME = 'Apron terminal';
+const NAME = 'Apron Embedded Terminal';
 
 /** @type {Record<Reason, string>} */
 const REASONS = {

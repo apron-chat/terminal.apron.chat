@@ -11,6 +11,7 @@
 	"scripts": {
 		"build": "node scripts/build.mjs",
 		"dev": "node scripts/serve.mjs",
+		"pretest": "git submodule update --init",
 		"test": "node --test"
 	},
 	"dependencies": {

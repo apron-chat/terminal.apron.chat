@@ -12,10 +12,12 @@ routes = [
 # address stays in the URL fragment and never reaches this host.
 # test/static.test.mjs keeps it so.
 
-# Wrangler builds the site before every deploy, version upload and `wrangler dev`,
-# whatever build command Workers Builds is given, so build/ is never missing or stale.
+# Before every deploy, version upload and `wrangler dev`, Wrangler runs the tests
+# (which fetch the protocol submodule's fixtures first, in `pretest`) and builds the
+# site, whatever build command Workers Builds is given: a failing test stops the
+# deploy, and build/ is never missing or stale.
 [build]
-command = "npm run build"
+command = "npm test && npm run build"
 watch_dir = ["src", "scripts"]
 
 [assets]

@@ -213,7 +213,6 @@ You need Node 22 or later. The only dependency is xterm.js, pinned to the
 version that apron-web uses.
 
 ```sh
-git submodule update --init   # or clone with --recurse-submodules
 npm ci
 npm test               # link parsing, stream reading, screen sizing, the terminal fixtures, and build checks
 npm run dev            # build, then serve at http://localhost:8789 with production's headers, plus localhost streams
@@ -244,7 +243,8 @@ titles and the clipboard as the page's screen (`behaviorOptions` and
 It writes each case twice: all at once, and a character at a time, as a live
 stream may split it anywhere.
 
-The fixtures come from the `protocol` submodule, pinned to a commit.
+The fixtures come from the `protocol` submodule, pinned to a commit, which
+`npm test` checks out first (`pretest`: `git submodule update --init`).
 Dependabot opens a pull request when it moves, so CI runs the page against new
 fixtures before they're adopted. To update by hand, run
 `git -C protocol fetch origin main`, check out the commit you want, and commit
@@ -285,11 +285,11 @@ One-time setup, in the Cloudflare dashboard:
    `apron-chat/terminal.apron.chat`.
 2. Set the project name to `terminal-apron-chat`. It must match `name` in
    `wrangler.toml`.
-3. Set **Build command** to `git submodule update --init && npm test`, as
-   apron-web's is: the tests need the fixtures in `protocol/`, and a failing
-   test stops the deploy. Workers Builds installs the dependencies itself
-   (`npm ci`, with the npm version in `packageManager`), and Wrangler builds
-   the site before it deploys (`[build]` in `wrangler.toml`).
+3. Leave **Build command** empty. Wrangler runs `npm test && npm run build`
+   before every deploy and preview (`[build]` in `wrangler.toml`), so a
+   failing test stops it whatever the dashboard says, and `npm test` checks
+   out the fixtures in `protocol/` first. Workers Builds installs the
+   dependencies itself (`npm ci`, with the npm version in `packageManager`).
 4. Leave **Deploy command** as `npx wrangler deploy`, the production branch as
    `main`, and builds for non-production branches on.
 5. Deploy. The first deploy creates the custom domain `terminal.apron.chat`

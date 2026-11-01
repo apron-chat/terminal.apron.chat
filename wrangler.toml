@@ -12,6 +12,12 @@ routes = [
 # address stays in the URL fragment and never reaches this host.
 # test/static.test.mjs keeps it so.
 
+# Wrangler builds the site before every deploy, version upload and `wrangler dev`,
+# whatever build command Workers Builds is given, so build/ is never missing or stale.
+[build]
+command = "npm run build"
+watch_dir = ["src", "scripts"]
+
 [assets]
 directory = "./build"
 not_found_handling = "404-page"

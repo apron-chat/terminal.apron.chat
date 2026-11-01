@@ -221,9 +221,11 @@ One-time setup, in the Cloudflare dashboard:
    `apron-chat/terminal.apron.chat`.
 2. Set the project name to `terminal-apron-chat`. It must match `name` in
    `wrangler.toml`.
-3. Set **Build command** to `npm test && npm run build`. Workers Builds
-   installs the dependencies itself (`npm ci`, with the npm version in
-   `packageManager`), and a failing test stops the deploy.
+3. Set **Build command** to `npm test`, so a failing test stops the deploy.
+   Workers Builds installs the dependencies itself (`npm ci`, with the npm
+   version in `packageManager`), and Wrangler builds the site before it
+   deploys (`[build]` in `wrangler.toml`), so the build command can also be
+   left empty.
 4. Leave **Deploy command** as `npx wrangler deploy`, the production branch as
    `main`, and builds for non-production branches on.
 5. Deploy. The first deploy creates the custom domain `terminal.apron.chat`

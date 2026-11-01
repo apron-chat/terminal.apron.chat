@@ -10,6 +10,9 @@ test('the site is static: no Worker code is deployed', () => {
 	const config = readFileSync(join(root, 'wrangler.toml'), 'utf8');
 	assert.doesNotMatch(config, /^\s*main\s*=/m, 'wrangler.toml must not set main');
 	assert.doesNotMatch(config, /run_worker_first/, 'wrangler.toml must not run a Worker first');
+	// Every deploy builds first, whatever build command Workers Builds is given.
+	assert.match(config, /^\[build\]\ncommand = "npm run build"$/m);
+	assert.match(config, /^directory = "\.\/build"$/m);
 });
 
 test('the build holds only the expected files', () => {

@@ -28,6 +28,15 @@ export const TERMINAL_COLS = 80;
 export const TERMINAL_ROWS = 40;
 
 /**
+ * A screen's size: a terminal embed's is 80 by 40 (§4.8.6); a recording
+ * opened from asciinema has its own (src/formats.js).
+ * @typedef {{ cols: number, rows: number }} TerminalSize
+ */
+
+/** A terminal embed's size. */
+export const EMBED_SIZE = /** @type {TerminalSize} */ ({ cols: TERMINAL_COLS, rows: TERMINAL_ROWS });
+
+/**
  * How a screen's font fits its space: between `min` and `max`, its 80
  * columns in the width, and with `rows` its 40 rows in the height too, down
  * to that size (a shorter space keeps it and scrolls).
@@ -70,11 +79,12 @@ export function keepLast(text, limit) {
  * replay shazow/apron's terminal fixtures through a headless xterm made with
  * these (test/fixtures.test.mjs).
  * @param {number} [scrollback]
+ * @param {TerminalSize} [size]
  */
-export function behaviorOptions(scrollback = 0) {
+export function behaviorOptions(scrollback = 0, { cols, rows } = EMBED_SIZE) {
 	return {
-		cols: TERMINAL_COLS,
-		rows: TERMINAL_ROWS,
+		cols,
+		rows,
 		// A line feed also returns to the first column (§4.8.6): output piped without a pseudo-terminal ends lines with
 		// a bare line feed, which a terminal's driver would turn into CR LF.
 		convertEol: true,
@@ -100,11 +110,12 @@ export function swallowOutsideControls(terminal) {
  * @param {string} fontFamily
  * @param {number} fontSize
  * @param {number} [scrollback]
+ * @param {TerminalSize} [size]
  * @returns {TerminalOptions}
  */
-export function terminalOptions(theme, fontFamily, fontSize, scrollback = 0) {
+export function terminalOptions(theme, fontFamily, fontSize, scrollback = 0, size = EMBED_SIZE) {
 	return {
-		...behaviorOptions(scrollback),
+		...behaviorOptions(scrollback, size),
 		// Read-only: nothing typed reaches it, and no cursor of its own blinks.
 		disableStdin: true,
 		cursorBlink: false,
@@ -154,8 +165,8 @@ export function terminalTheme(element) {
 }
 
 /**
- * The size that fits the 80 columns in `width` pixels (and, for a fit with
- * `rows`, the 40 rows in `height`, down to that size), in quarter pixels,
+ * The size that fits the columns in `width` pixels (and, for a fit with
+ * `rows`, the rows in `height`, down to that size), in quarter pixels,
  * between the fit's smallest and largest. `ratio` is the face's advance and
  * `line` its row height, per pixel of size.
  * @param {number} width
@@ -163,21 +174,23 @@ export function terminalTheme(element) {
  * @param {TerminalFit} [fit]
  * @param {number} [height]
  * @param {number} [line]
+ * @param {TerminalSize} [terminal] the screen's columns and rows, 80 by 40 unless said
  */
-export function terminalFontSize(width, ratio, fit = INLINE_FIT, height = Infinity, line = 1.2) {
-	let size = width / (TERMINAL_COLS * ratio);
-	if (fit.rows !== undefined) size = Math.min(size, Math.max(fit.rows, height / (TERMINAL_ROWS * line)));
+export function terminalFontSize(width, ratio, fit = INLINE_FIT, height = Infinity, line = 1.2, { cols, rows } = EMBED_SIZE) {
+	let size = width / (cols * ratio);
+	if (fit.rows !== undefined) size = Math.min(size, Math.max(fit.rows, height / (rows * line)));
 	return Math.max(fit.min, Math.min(fit.max, Math.floor(size * 4) / 4));
 }
 
 /**
- * The rows to show: all 40 on the alternate screen or once lines have
+ * The rows to show: all of them on the alternate screen or once lines have
  * scrolled off, else down to the last one written, at least one.
  * @param {IBuffer} buffer
+ * @param {number} [rows] the screen's rows, 40 unless said
  */
-export function shownRows(buffer) {
-	if (buffer.type === 'alternate' || buffer.baseY > 0) return TERMINAL_ROWS;
-	for (let y = TERMINAL_ROWS - 1; y > 0; y--) {
+export function shownRows(buffer, rows = TERMINAL_ROWS) {
+	if (buffer.type === 'alternate' || buffer.baseY > 0) return rows;
+	for (let y = rows - 1; y > 0; y--) {
 		const line = buffer.getLine(y);
 		if (!line) continue;
 		if (line.translateToString(true).trim()) return y + 1;
@@ -216,6 +229,7 @@ function faceRatios(/** @type {HTMLElement} */ host, /** @type {string} */ fontF
  * @property {number} [scrollback] the lines it keeps that scroll off the top, 0 unless said. With some, a wheel, a
  *   vertical swipe or a key (on `keys`) over the space scrolls through them and the screen as one (`scrollBy`).
  * @property {HTMLElement | Document} [keys] where its scrolling keys are read, with scrollback
+ * @property {TerminalSize} [size] its columns and rows, 80 by 40 unless said
  */
 
 export class TerminalScreen {
@@ -223,6 +237,7 @@ export class TerminalScreen {
 	/** @type {HTMLElement} */ #space;
 	/** @type {HTMLElement | Document | undefined} */ #keys;
 	/** @type {TerminalFit} */ #fitting;
+	/** @type {TerminalSize} */ #size;
 	/** @type {number} */ #scrollback;
 	/** @type {Terminal} */ #terminal;
 	/** @type {number | undefined} */ #frame;
@@ -245,8 +260,9 @@ export class TerminalScreen {
 	 * @param {HTMLElement} host
 	 * @param {TerminalScreenOptions} [options]
 	 */
-	constructor(Terminal, host, { space = host, fit = INLINE_FIT, scrollback = 0, keys } = {}) {
+	constructor(Terminal, host, { space = host, fit = INLINE_FIT, scrollback = 0, keys, size = EMBED_SIZE } = {}) {
 		this.#host = host;
+		this.#size = size;
 		this.#space = space;
 		this.#fitting = fit;
 		this.#scrollback = scrollback;
@@ -254,7 +270,7 @@ export class TerminalScreen {
 		const fontFamily = getComputedStyle(host).getPropertyValue('--font-mono').trim() || 'monospace';
 		({ advance: this.#ratio, line: this.#line } = faceRatios(host, fontFamily));
 		const room = this.#room();
-		const terminal = new Terminal(terminalOptions(terminalTheme(host), fontFamily, terminalFontSize(room.width, this.#ratio, fit, room.height, this.#line), scrollback));
+		const terminal = new Terminal(terminalOptions(terminalTheme(host), fontFamily, terminalFontSize(room.width, this.#ratio, fit, room.height, this.#line, size), scrollback, size));
 		swallowOutsideControls(terminal);
 		// No key is xterm's once a click has focused it: the arrows and Page Up reach the page, and copying is the browser's.
 		terminal.attachCustomKeyEventHandler(() => false);
@@ -401,7 +417,7 @@ export class TerminalScreen {
 		const fit = this.#fitting;
 		const { width, height } = this.#room();
 		if (!width) return;
-		let size = terminalFontSize(width, this.#ratio, fit, height, this.#line);
+		let size = terminalFontSize(width, this.#ratio, fit, height, this.#line, this.#size);
 		if (terminal.options.fontSize !== size) terminal.options.fontSize = size;
 		const drawn = this.#screenElement()?.getBoundingClientRect();
 		if (drawn) {
@@ -426,8 +442,8 @@ export class TerminalScreen {
 			this.#frame = undefined;
 			const screen = this.#screenElement();
 			if (this.#disposed || !screen) return;
-			const rows = shownRows(this.#terminal.buffer.active);
-			const rowHeight = screen.getBoundingClientRect().height / TERMINAL_ROWS;
+			const rows = shownRows(this.#terminal.buffer.active, this.#size.rows);
+			const rowHeight = screen.getBoundingClientRect().height / this.#size.rows;
 			this.#host.style.height = `${Math.ceil(rows * rowHeight)}px`;
 			this.#host.dataset.rows = String(rows);
 			// With scrollback, a space at the screen's foot (the newest line) stays there as the screen grows.
@@ -442,7 +458,7 @@ export class TerminalScreen {
 
 	/** The height of a row as drawn; 0 before it is. */
 	#rowHeight() {
-		return (this.#screenElement()?.getBoundingClientRect().height ?? 0) / TERMINAL_ROWS;
+		return (this.#screenElement()?.getBoundingClientRect().height ?? 0) / this.#size.rows;
 	}
 
 	/** A wheel up and down scrolls it (`scrollBy`), and never xterm; sideways, or a pinch (with Ctrl), is the browser's. */
@@ -484,7 +500,7 @@ export class TerminalScreen {
 			this.#owed = 0;
 			return;
 		}
-		const page = Math.max(1, Math.min(TERMINAL_ROWS, Math.floor(this.#space.clientHeight / row)) - 1);
+		const page = Math.max(1, Math.min(this.#size.rows, Math.floor(this.#space.clientHeight / row)) - 1);
 		const lines = step === 'page' ? page * (event.key === 'PageUp' ? -1 : 1) : step;
 		this.#owed = 0;
 		this.scrollBy(lines * row);

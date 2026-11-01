@@ -8,6 +8,9 @@
  *   live text a chat server serves. Percent-encode it when it has a `&`, `#`,
  *   `+` or `%` of its own. Optional with `embed=1`, for a client that only
  *   sends a finished `output` in (see README.md, Embedding).
+ * - `cast` is, in place of `stream`, an asciinema recording to replay (an
+ *   asciicast, src/formats.js), such as `https://asciinema.org/a/<id>.cast`.
+ *   It is read as `stream` is, and has the same checks.
  * - `title` is optional: the embed's `title`, such as the command.
  * - `embed=1` shows the compact layout for an iframe in a chat message. A
  *   page in a frame shows it anyway.
@@ -33,7 +36,8 @@
 /**
  * What the page shows.
  * @typedef {object} View
- * @property {string} [url] the stream's address, as the URL parser writes it; absent only in an embed
+ * @property {string} [url] the stream's address, or the recording's, as the URL parser writes it; absent only in an embed
+ * @property {boolean} [cast] whether `url` is a recording (`cast`) rather than a stream
  * @property {string} [host] where the stream is read from, to show
  * @property {string} [title] what it is, such as the command that writes it
  * @property {boolean} embed the compact layout, for an iframe
@@ -54,7 +58,8 @@ export const MAX_TITLE = 120;
 export function parseLocation(location, options = {}) {
 	const params = new URLSearchParams(location.hash.replace(/^#/, ''));
 	// The stream's address is a credential to read it: in the query, it has already reached this site's host.
-	if (new URLSearchParams(location.search).has('stream')) return { kind: 'invalid', reason: 'exposed-stream', ...look(params) };
+	const query = new URLSearchParams(location.search);
+	if (query.has('stream') || query.has('cast')) return { kind: 'invalid', reason: 'exposed-stream', ...look(params) };
 	return parseParams(params, options);
 }
 
@@ -69,14 +74,16 @@ export function parseParams(params, options = {}) {
 	if ([...params.keys()].length === 0) return { kind: 'empty' };
 	const shown = look(params);
 	const title = cleanTitle(params.get('title') ?? '');
-	const value = params.get('stream');
+	const stream = params.get('stream');
+	const cast = stream === null ? params.get('cast') : null;
+	const value = stream ?? cast;
 	if (value === null || value.trim() === '') {
 		if (shown.embed) return { kind: 'view', view: { ...shown, ...(title ? { title } : {}) } };
 		return { kind: 'invalid', reason: 'no-stream', ...shown };
 	}
 	const checked = checkStreamUrl(value, options);
 	if (typeof checked === 'string') return { kind: 'invalid', reason: checked, ...shown };
-	return { kind: 'view', view: { url: checked.toString(), host: checked.host, ...(title ? { title } : {}), ...shown } };
+	return { kind: 'view', view: { url: checked.toString(), host: checked.host, ...(cast !== null ? { cast: true } : {}), ...(title ? { title } : {}), ...shown } };
 }
 
 /**
@@ -140,14 +147,14 @@ export function cleanTitle(title) {
 /**
  * The address of the page that shows a stream: the inverse of `parseLocation`.
  * @param {string} origin this site's origin, such as `https://terminal.apron.chat`
- * @param {{ url?: string, title?: string, embed?: boolean, theme?: 'light' | 'dark' }} view
+ * @param {{ url?: string, cast?: boolean, title?: string, embed?: boolean, theme?: 'light' | 'dark' }} view
  */
-export function viewerUrl(origin, { url, title, embed, theme }) {
+export function viewerUrl(origin, { url, cast, title, embed, theme }) {
 	// Encoded as a component, but with `:` and `/` left readable: neither means anything in a fragment's keys.
 	const encode = (/** @type {string} */ value) => encodeURIComponent(value).replace(/%3A/gi, ':').replace(/%2F/gi, '/');
 	/** @type {string[]} */
 	const keys = [];
-	if (url) keys.push(`stream=${encode(url)}`);
+	if (url) keys.push(`${cast ? 'cast' : 'stream'}=${encode(url)}`);
 	if (title) keys.push(`title=${encode(title)}`);
 	if (embed) keys.push('embed=1');
 	if (theme) keys.push(`theme=${theme}`);

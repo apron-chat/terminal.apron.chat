@@ -46,6 +46,17 @@ test('embed and theme', () => {
 	assert.deepEqual(at('#embed=1&stream=http://chat.example/t/1&theme=dark'), { kind: 'invalid', reason: 'insecure-stream', embed: true, theme: 'dark' });
 });
 
+test('a recording to replay, in place of a stream', () => {
+	assert.deepEqual(at('#cast=https://asciinema.org/a/335480.cast&title=demo'), { kind: 'view', view: { url: 'https://asciinema.org/a/335480.cast', host: 'asciinema.org', cast: true, title: 'demo', embed: false } });
+	// A stream wins over a recording.
+	const both = at('#cast=https://a.example/x.cast&stream=https://b.example/t/1');
+	assert.deepEqual(both.kind === 'view' && [both.view.url, both.view.cast], ['https://b.example/t/1', undefined]);
+	// The same checks as a stream.
+	assert.deepEqual(at('#cast=http://a.example/x.cast'), { kind: 'invalid', reason: 'insecure-stream', embed: false });
+	assert.equal(at('', '?cast=https://a.example/x.cast').kind, 'invalid');
+	assert.equal(viewerUrl('https://terminal.apron.chat', { url: 'https://asciinema.org/a/1.cast', cast: true }), 'https://terminal.apron.chat/#cast=https://asciinema.org/a/1.cast');
+});
+
 test('only https, or http to this device from a page on it', () => {
 	assert.equal(checkStreamUrl('http://chat.example/t/1'), 'insecure-stream');
 	assert.equal(checkStreamUrl('http://chat.example/t/1', { local: true }), 'insecure-stream');

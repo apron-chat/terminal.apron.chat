@@ -423,3 +423,13 @@ code {
 :root[data-embed] .stage .note {
 	margin: var(--space-1) 0 0;
 }
+
+.open-file .button {
+	margin-right: var(--space-1);
+}
+
+/* A file dragged over the page: it opens when dropped. */
+:root[data-dropping] body {
+	outline: 3px dashed var(--accent);
+	outline-offset: -6px;
+}

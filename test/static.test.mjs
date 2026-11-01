@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { build, CONNECT_SOURCES, PAGE_FILES } from '../scripts/build.mjs';
+import { build, DEV_HEADERS, LOCAL_CONNECT_SOURCES, PAGE_FILES } from '../scripts/build.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -22,8 +22,12 @@ test('the build holds only the expected files', () => {
 	assert.deepEqual(walk(out).sort(), [...PAGE_FILES, '_headers', 'xterm.css', 'xterm.mjs'].sort());
 	const headers = readFileSync(join(out, '_headers'), 'utf8');
 	assert.match(headers, /^\/\*\n {2}Content-Security-Policy: default-src 'none'; script-src 'self';/);
-	assert.match(headers, /connect-src https: http:\/\/localhost:\* http:\/\/\*\.localhost:\* http:\/\/127\.0\.0\.1:\*;/);
-	for (const source of CONNECT_SOURCES) assert.doesNotMatch(source, /\[/, 'CSP sources cannot name an IPv6 address');
+	// Production reads streams over https only: never the viewer's own machine.
+	assert.match(headers, /connect-src https:;/);
+	assert.doesNotMatch(headers, /localhost|127\.0\.0\.1/);
+	// The development server may read this device's streams too.
+	assert.match(DEV_HEADERS['Content-Security-Policy'], /connect-src https: http:\/\/localhost:\* http:\/\/\*\.localhost:\* http:\/\/127\.0\.0\.1:\*;/);
+	for (const source of LOCAL_CONNECT_SOURCES) assert.doesNotMatch(source, /\[/, 'CSP sources cannot name an IPv6 address');
 	assert.match(headers, /trusted-types 'none'/);
 	// Any page may frame it, sandboxed too: its modules then load with CORS from an opaque origin.
 	assert.match(headers, /frame-ancestors \*;/);

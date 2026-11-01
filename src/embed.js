@@ -59,14 +59,67 @@ export function outputOf(data) {
  */
 export function reportHeight(element, post) {
 	let last = -1;
-	const report = () => {
-		const height = Math.ceil(element.getBoundingClientRect().height);
-		if (height === last) return;
-		last = height;
-		post({ type: HEIGHT, height });
+	/** @type {number | undefined} */
+	let frame;
+	// Measured in the next frame, after the screen has hidden the rows not written (src/screen.js), so the parent
+	// isn't first told the height of all 40.
+	const schedule = () => {
+		frame ??= requestAnimationFrame(() => {
+			frame = undefined;
+			const height = Math.ceil(element.getBoundingClientRect().height);
+			if (height === last) return;
+			last = height;
+			post({ type: HEIGHT, height });
+		});
 	};
-	const observer = new ResizeObserver(report);
+	const observer = new ResizeObserver(schedule);
 	observer.observe(element);
-	report();
-	return () => observer.disconnect();
+	return () => {
+		observer.disconnect();
+		if (frame !== undefined) cancelAnimationFrame(frame);
+	};
+}
+
+/**
+ * Tells `changed` when `element` goes out of sight and comes back: false once
+ * it has been out of sight for `outMs` (its tab hidden, or, in a frame, the
+ * frame scrolled out of the chat's view), true as soon as it is back. Until
+ * the function returned is called.
+ * @param {Element} element
+ * @param {(inSight: boolean) => void} changed
+ * @param {number} outMs
+ */
+export function watchSight(element, changed, outMs) {
+	let inView = true;
+	let visible = document.visibilityState !== 'hidden';
+	/** What `changed` was last told. */
+	let told = true;
+	/** @type {ReturnType<typeof setTimeout> | undefined} */
+	let timer;
+	const update = () => {
+		clearTimeout(timer);
+		if (inView && visible) {
+			if (!told) changed((told = true));
+		} else if (told) {
+			timer = setTimeout(() => changed((told = false)), outMs);
+		}
+	};
+	// The viewport of the top-level page, from inside a frame too: a frame in a chat scrolled out of view isn't in sight.
+	const observer = typeof IntersectionObserver === 'function'
+		? new IntersectionObserver((entries) => {
+			inView = entries.some((entry) => entry.isIntersecting);
+			update();
+		})
+		: undefined;
+	observer?.observe(element);
+	const onVisibility = () => {
+		visible = document.visibilityState !== 'hidden';
+		update();
+	};
+	document.addEventListener('visibilitychange', onVisibility);
+	return () => {
+		clearTimeout(timer);
+		observer?.disconnect();
+		document.removeEventListener('visibilitychange', onVisibility);
+	};
 }

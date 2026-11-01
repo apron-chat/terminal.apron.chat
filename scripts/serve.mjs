@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Serves build/ locally with the headers production sends, so the page runs
- * under the same Content-Security-Policy.
+ * under the same Content-Security-Policy, except that it may also read
+ * streams over http from this device (LOCAL_CONNECT_SOURCES).
  *
  *   npm run dev              # http://localhost:8789
  *   PORT=9000 npm run dev
@@ -12,7 +13,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
-import { build, HEADERS } from './build.mjs';
+import { build, DEV_HEADERS as HEADERS } from './build.mjs';
 
 const out = build();
 const port = Number(process.env.PORT ?? 8789);

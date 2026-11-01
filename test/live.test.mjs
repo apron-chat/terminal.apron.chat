@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { definitive, followLiveText, liveTextDecoder } from '../src/live.js';
+import { definitive, followLiveText, liveTextDecoder, MAX_RETRY_AFTER_MS, retryAfterMs } from '../src/live.js';
 
 const NO_WAIT = [0, 0, 0];
 
 /** A response whose body is `chunks`, then ends, or fails after them with `fail`. */
-function response(/** @type {string[]} */ chunks, { status = 200, fail = false } = {}) {
+function response(/** @type {string[]} */ chunks, { status = 200, fail = false, headers = {} } = {}) {
 	const encoder = new TextEncoder();
 	const queue = [...chunks];
 	// One chunk a read, so a failure comes after the chunks before it are read, as a dropped connection's does.
@@ -17,7 +17,7 @@ function response(/** @type {string[]} */ chunks, { status = 200, fail = false }
 			else controller.close();
 		}
 	});
-	return new Response(status === 200 ? body : 'refused', { status });
+	return new Response(status === 200 ? body : 'refused', { status, headers });
 }
 
 /** A sink that records what it is told, as text. */
@@ -115,4 +115,36 @@ test('decoding keeps a character cut between chunks, and keeps a BOM', () => {
 	text += decoder.decode();
 	assert.equal(text, '﻿é✓');
 	assert.equal(liveTextDecoder().decode(new Uint8Array([0x61, 0xff, 0x62])), 'a�b');
+});
+
+test('Retry-After: seconds or a date', () => {
+	assert.equal(retryAfterMs('10'), 10_000);
+	assert.equal(retryAfterMs(' 3 '), 3000);
+	assert.equal(retryAfterMs('Sun, 01 Nov 2026 16:00:30 GMT', Date.parse('Sun, 01 Nov 2026 16:00:00 GMT')), 30_000);
+	assert.equal(retryAfterMs(null), undefined);
+	assert.equal(retryAfterMs('soon'), undefined);
+});
+
+test('a 429 waits as long as the server asks, up to a minute', async () => {
+	for (const [header, expected] of [['10', 10_000], ['3600', MAX_RETRY_AFTER_MS]]) {
+		/** @type {number[]} */
+		const delays = [];
+		const controller = new AbortController();
+		const outcome = await followLiveText('https://chat.example/t/1', {
+			start() {},
+			chunk() {},
+			retrying: ({ delay, status }) => {
+				delays.push(delay);
+				assert.equal(status, 429);
+				// Not waiting it out in a test.
+				controller.abort();
+			}
+		}, controller.signal, {
+			// The backoff is shorter than what the server asks.
+			retryMs: [1000],
+			fetch: async () => response([], { status: 429, headers: { 'Retry-After': header } })
+		});
+		assert.deepEqual(delays, [expected]);
+		assert.deepEqual(outcome, { how: 'aborted' });
+	}
 });

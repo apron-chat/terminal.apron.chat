@@ -19,13 +19,20 @@ const out = join(root, 'build');
 export const PAGE_FILES = ['index.html', '404.html', 'style.css', 'app.js', 'stream.js', 'live.js', 'screen.js', 'embed.js', 'logo.svg', 'robots.txt'];
 
 /**
- * Where the page may read a stream from: any https origin, and http only on
- * this device, as `checkStreamUrl` in src/stream.js allows. (A CSP source
- * can't name an IPv6 address, so http://[::1] isn't one.) Live text is served
- * with `Access-Control-Allow-Origin: *` (PROTOCOL.md §4.8.5), so the page reads
- * it without credentials.
+ * Where the page may read a stream from: any https origin. Live text is
+ * served with `Access-Control-Allow-Origin: *` (PROTOCOL.md §4.8.5), so the
+ * page reads it without credentials.
  */
-export const CONNECT_SOURCES = ['https:', 'http://localhost:*', 'http://*.localhost:*', 'http://127.0.0.1:*'];
+export const CONNECT_SOURCES = ['https:'];
+
+/**
+ * And, served by `npm run dev` only, http on this device, as `checkStreamUrl`
+ * in src/stream.js allows on a page that is on this device too. (A CSP source
+ * can't name an IPv6 address, so http://[::1] isn't one.) Never in
+ * production: a link could make every viewer's browser read their own
+ * machine's local services.
+ */
+export const LOCAL_CONNECT_SOURCES = ['http://localhost:*', 'http://*.localhost:*', 'http://127.0.0.1:*'];
 
 /**
  * Headers for every response. The page builds all of its markup with DOM
@@ -39,26 +46,37 @@ export const CONNECT_SOURCES = ['https:', 'http://localhost:*', 'http://*.localh
  * because in a sandboxed iframe without `allow-same-origin` the page's origin
  * is opaque, and a module script, and each module it imports, loads with CORS.
  */
-export const HEADERS = {
-	'Content-Security-Policy': [
-		"default-src 'none'",
-		"script-src 'self'",
-		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self'",
-		`connect-src ${CONNECT_SOURCES.join(' ')}`,
-		"base-uri 'none'",
-		"form-action 'none'",
-		'frame-ancestors *',
-		"require-trusted-types-for 'script'",
-		"trusted-types 'none'"
-	].join('; '),
-	'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
-	'Referrer-Policy': 'no-referrer',
-	'X-Content-Type-Options': 'nosniff',
-	'Cross-Origin-Opener-Policy': 'same-origin',
-	'Access-Control-Allow-Origin': '*',
-	'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=()'
-};
+export const HEADERS = headers(CONNECT_SOURCES);
+
+/** The headers for the development server: production's, and streams from this device. */
+export const DEV_HEADERS = headers([...CONNECT_SOURCES, ...LOCAL_CONNECT_SOURCES]);
+
+/**
+ * @param {string[]} connect where the page may read streams from
+ * @returns {Record<string, string>}
+ */
+function headers(connect) {
+	return {
+		'Content-Security-Policy': [
+			"default-src 'none'",
+			"script-src 'self'",
+			"style-src 'self' 'unsafe-inline'",
+			"img-src 'self'",
+			`connect-src ${connect.join(' ')}`,
+			"base-uri 'none'",
+			"form-action 'none'",
+			'frame-ancestors *',
+			"require-trusted-types-for 'script'",
+			"trusted-types 'none'"
+		].join('; '),
+		'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
+		'Referrer-Policy': 'no-referrer',
+		'X-Content-Type-Options': 'nosniff',
+		'Cross-Origin-Opener-Policy': 'same-origin',
+		'Access-Control-Allow-Origin': '*',
+		'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=()'
+	};
+}
 
 /** `_headers` for Cloudflare static assets. */
 export function headersFile() {

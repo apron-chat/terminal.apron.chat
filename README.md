@@ -30,9 +30,13 @@ showing what arrived once the output ends.
 - Percent-encode a value that contains `&`, `#`, `+` or `%`. `:` and `/` can
   stay as they are.
 - If a key is repeated, the first value is used.
-- `stream` must be `https:`. Plain `http:` is allowed only for `localhost`,
-  names under it, and `127.0.0.1`, for local development. An address with a
-  user name or password is refused.
+- `stream` must be `https:`. An address with a user name or password is
+  refused.
+- Plain `http:` to `localhost`, names under it, or `127.0.0.1` works only in a
+  copy of the page that is itself on localhost, such as `npm run dev`, for
+  local development. terminal.apron.chat refuses it, and its CSP doesn't allow
+  it. Otherwise a link could make every viewer's browser read services running
+  on their own machine.
 
 `viewerUrl` in [`src/stream.js`](src/stream.js) builds a link. A server can
 build the same thing in one line:
@@ -53,17 +57,26 @@ build the same thing in one line:
   titles (OSC 0–2) and clipboard writes (OSC 52) are ignored. OSC 8 links are
   shown but never opened.
 - If a read fails or drops, it tries again after 1, 2, 4, 8, then every 15
-  seconds, and the new response replaces what was shown. A 4xx other than 408
-  or 429 stops it, because every try counts against the server's limits on
-  readers.
+  seconds, and the new response replaces what was shown. It waits at least as
+  long as the server's `Retry-After` asks, up to a minute. A 4xx other than
+  408 or 429 stops it, because every try counts against the server's limits
+  on readers.
+- When the terminal is out of sight for 15 seconds (its tab hidden, or its
+  frame scrolled out of view), it stops reading. It reads afresh when it's
+  back in sight, so it doesn't hold one of the server's few reader places for
+  nobody.
 - When the response ends, the output has ended. The page keeps what it showed.
 
 Chat servers differ once the output has ended. apron-server-go keeps serving
 the finished output at the same address. apron-server-cloudflare answers 404,
 and the page then says the stream has ended and points to the chat message,
-which shows the final output. Servers can also limit how many people read one
-stream (apron-server-cloudflare allows 5 to 10). When they are full, the page
-says so instead of retrying.
+which shows the final output.
+
+Servers also limit who reads a stream. apron-server-cloudflare allows 5 to 10
+readers at a time. When they are full it answers 429 with `Retry-After`; the
+page says there are too many readers and tries again when asked. It also
+limits how many times a stream is read in all (15 to 30). Past that it answers
+403, and the page stops and points to the chat message.
 
 ## Embedding
 
@@ -120,6 +133,15 @@ sends is never secret: no address and no output.
   the stream and shows the output from a fresh terminal, as Finished. For an
   embed that is already finished when you show it, leave `stream` out of the
   link (`#embed=1&title=…`) and send `output` on `ready`.
+- **Changing the address:** an iframe whose `src` changes only after the `#`
+  doesn't reload, but the page notices and starts afresh. It sends `ready`
+  again, so send the output again too. A change of `theme` alone keeps what it
+  shows. To show the output of a terminal that has just finished, send
+  `output` rather than change `src`.
+- **Hybrid apps:** `frame-ancestors *` matches pages on `http:` and `https:`
+  only. An app whose own pages are on `file:` or a custom scheme, such as
+  Tauri's or Capacitor's, can load the page in a WebView instead
+  ([Native apps](#native-apps)).
 
 ```js
 // One listener for every terminal frame on the page.
@@ -169,12 +191,15 @@ headers in `build/_headers`, and point your iframes there.
 - The Content-Security-Policy (in `_headers`, from
   [`scripts/build.mjs`](scripts/build.mjs)) allows only the page's own scripts.
   It forbids the DOM's HTML sinks (Trusted Types), and lets the page connect
-  only to `https:` and to localhost over `http:`.
+  only to `https:`. The development server also allows localhost over
+  `http:`.
 - Inline styles are allowed, because xterm.js sizes and colors its screen with
   `<style>` elements and `style` attributes. No markup can come from a stream:
   its text only ever reaches xterm's cells.
-- The page shows which host it streams from, so that output can't pass itself
-  off as coming from somewhere else. Titles are cleaned up before they are
+- The full page shows which host it streams from, so that output can't pass
+  itself off as coming from somewhere else. In a frame it doesn't: the client
+  that embeds it chose the stream. Links in a frame open in a new tab, never
+  in the frame. Titles are cleaned up before they are
   shown: they're kept on one line, controls that could reorder the text around
   them are removed, and they're cut to 120 characters.
 
@@ -186,7 +211,7 @@ version that apron-web uses.
 ```sh
 npm ci
 npm test               # link parsing, stream reading, screen sizing, and build checks
-npm run dev            # build, then serve at http://localhost:8789 with production's headers
+npm run dev            # build, then serve at http://localhost:8789 with production's headers, plus localhost streams
 DEMO=1 npm run dev     # the same, with a demo stream at /demo and a link to view it
 npm run build          # write the site to build/
 ```

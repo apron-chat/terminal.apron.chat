@@ -46,17 +46,23 @@ test('embed and theme', () => {
 	assert.deepEqual(at('#embed=1&stream=http://chat.example/t/1&theme=dark'), { kind: 'invalid', reason: 'insecure-stream', embed: true, theme: 'dark' });
 });
 
-test('only https, or http to this device', () => {
+test('only https, or http to this device from a page on it', () => {
 	assert.equal(checkStreamUrl('http://chat.example/t/1'), 'insecure-stream');
+	assert.equal(checkStreamUrl('http://chat.example/t/1', { local: true }), 'insecure-stream');
+	// terminal.apron.chat never reads the viewer's own machine.
+	assert.equal(checkStreamUrl('http://localhost:8080/t/1'), 'local-stream');
+	assert.equal(checkStreamUrl('http://127.0.0.1/t/1'), 'local-stream');
+	assert.deepEqual(at('#stream=http://localhost:8080/t/1'), { kind: 'invalid', reason: 'local-stream', embed: false });
+	assert.equal(parseLocation({ hash: '#stream=http://localhost:8080/t/1', search: '' }, { local: true }).kind, 'view');
 	assert.equal(checkStreamUrl('http://192.168.1.2/t/1'), 'insecure-stream');
 	assert.equal(checkStreamUrl('javascript:alert(1)'), 'bad-stream');
 	assert.equal(checkStreamUrl('data:text/plain,hi'), 'bad-stream');
 	assert.equal(checkStreamUrl('ftp://chat.example/t/1'), 'bad-stream');
 	assert.equal(checkStreamUrl('/t/1'), 'bad-stream');
 	assert.equal(checkStreamUrl('not a url'), 'bad-stream');
-	assert.equal(checkStreamUrl('http://[::1]:3000/t/1'), 'insecure-stream', 'a CSP source cannot name an IPv6 address');
+	assert.equal(checkStreamUrl('http://[::1]:3000/t/1', { local: true }), 'insecure-stream', 'a CSP source cannot name an IPv6 address');
 	for (const url of ['http://localhost:8080/t/1', 'http://127.0.0.1/t/1', 'http://apron.localhost/t/1']) {
-		assert.ok(checkStreamUrl(url) instanceof URL, url);
+		assert.ok(checkStreamUrl(url, { local: true }) instanceof URL, url);
 	}
 });
 
@@ -93,7 +99,7 @@ test('viewerUrl is what parseLocation reads', () => {
 	]) {
 		const link = new URL(viewerUrl('https://terminal.apron.chat', stream));
 		assert.equal(link.origin, 'https://terminal.apron.chat');
-		const parsed = parseLocation(link);
+		const parsed = parseLocation(link, { local: true });
 		assert.equal(parsed.kind, 'view');
 		if (parsed.kind !== 'view') continue;
 		assert.equal(parsed.view.url, new URL(stream.url).toString());

@@ -19,7 +19,16 @@
  * reaches this site's host.
  */
 
-/** @typedef {'no-stream' | 'bad-stream' | 'insecure-stream' | 'credentials-in-stream' | 'exposed-stream'} Reason */
+/** @typedef {'no-stream' | 'bad-stream' | 'insecure-stream' | 'local-stream' | 'credentials-in-stream' | 'exposed-stream'} Reason */
+
+/**
+ * How a page reads links: `local`, whether it may read a stream over http
+ * from this device. Only a copy of the page that is itself on this device
+ * may, such as `npm run dev`'s: on terminal.apron.chat, a link could
+ * otherwise make every viewer's browser read whatever their own machine
+ * serves on localhost.
+ * @typedef {{ local?: boolean }} ReadOptions
+ */
 
 /**
  * What the page shows.
@@ -39,22 +48,24 @@ export const MAX_TITLE = 120;
 /**
  * Reads the address of the page.
  * @param {Pick<Location, 'search' | 'hash'>} location
+ * @param {ReadOptions} [options]
  * @returns {Parsed}
  */
-export function parseLocation(location) {
+export function parseLocation(location, options = {}) {
 	const params = new URLSearchParams(location.hash.replace(/^#/, ''));
 	// The stream's address is a credential to read it: in the query, it has already reached this site's host.
 	if (new URLSearchParams(location.search).has('stream')) return { kind: 'invalid', reason: 'exposed-stream', ...look(params) };
-	return parseParams(params);
+	return parseParams(params, options);
 }
 
 /**
  * Reads the keys. A repeated key counts with its first value, as
  * `URLSearchParams.get` gives it.
  * @param {URLSearchParams} params form-decoded, so a `+` is a space
+ * @param {ReadOptions} [options]
  * @returns {Parsed}
  */
-export function parseParams(params) {
+export function parseParams(params, options = {}) {
 	if ([...params.keys()].length === 0) return { kind: 'empty' };
 	const shown = look(params);
 	const title = cleanTitle(params.get('title') ?? '');
@@ -63,7 +74,7 @@ export function parseParams(params) {
 		if (shown.embed) return { kind: 'view', view: { ...shown, ...(title ? { title } : {}) } };
 		return { kind: 'invalid', reason: 'no-stream', ...shown };
 	}
-	const checked = checkStreamUrl(value);
+	const checked = checkStreamUrl(value, options);
 	if (typeof checked === 'string') return { kind: 'invalid', reason: checked, ...shown };
 	return { kind: 'view', view: { url: checked.toString(), host: checked.host, ...(title ? { title } : {}), ...shown } };
 }
@@ -80,12 +91,14 @@ function look(params) {
 
 /**
  * A stream's address, or why the page won't read it: https, or http to this
- * device only; no user name or password, which a fetch from this page would
- * not send anyway; no fragment, which is never sent.
+ * device only on a page that is on this device too (`ReadOptions`); no user
+ * name or password, which a fetch from this page would not send anyway; no
+ * fragment, which is never sent.
  * @param {string} value
+ * @param {ReadOptions} [options]
  * @returns {URL | Reason}
  */
-export function checkStreamUrl(value) {
+export function checkStreamUrl(value, { local = false } = {}) {
 	let url;
 	try {
 		url = new URL(value.trim());
@@ -94,15 +107,16 @@ export function checkStreamUrl(value) {
 	}
 	if (url.protocol !== 'https:' && url.protocol !== 'http:') return 'bad-stream';
 	if (url.protocol === 'http:' && !isLoopback(url.hostname)) return 'insecure-stream';
+	if (url.protocol === 'http:' && !local) return 'local-stream';
 	if (url.username || url.password) return 'credentials-in-stream';
 	url.hash = '';
 	return url;
 }
 
 /**
- * Whether a host is this device, by a name the page's CSP lets it read over
- * http (scripts/build.mjs CONNECT_SOURCES): localhost, a name under it, or
- * 127.0.0.1. The hostname is as the URL parser gives it: lowercased, IPv4 in
+ * Whether a host is this device, by a name the development server's CSP lets
+ * the page read over http (scripts/build.mjs LOCAL_CONNECT_SOURCES):
+ * localhost, a name under it, or 127.0.0.1. The hostname is as the URL parser gives it: lowercased, IPv4 in
  * dotted decimal.
  * @param {string} hostname
  */

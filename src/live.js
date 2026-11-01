@@ -22,6 +22,9 @@
  * @property {number} [status] the server's status, when it answered with one other than OK
  */
 
+/** The longest a server's `Retry-After` makes a reader wait, in ms. */
+export const MAX_RETRY_AFTER_MS = 60_000;
+
 /**
  * How following live text stopped: it `ended` (the response ended, so the
  * text did), the server `refused` it with a status that trying again would not
@@ -47,11 +50,31 @@ export function liveTextDecoder() {
 
 /** A `GET url` the server answered with a status other than OK. */
 export class LiveTextStatusError extends Error {
-	/** @param {number} status */
-	constructor(status) {
+	/**
+	 * @param {number} status
+	 * @param {number} [retryAfterMs] how long the server asked readers to wait (`Retry-After`), such as a reader cap's 429
+	 */
+	constructor(status, retryAfterMs) {
 		super(`The stream is not available (${status})`);
 		this.status = status;
+		this.retryAfterMs = retryAfterMs;
 	}
+}
+
+/**
+ * A `Retry-After` header's wait, in ms: seconds, or an HTTP date. Undefined
+ * without one, or for one that can't be read. apron-server-cloudflare sends
+ * it with a 429 when a text has as many readers as it may have, and exposes
+ * it to other origins.
+ * @param {string | null} value
+ * @param {number} [now]
+ */
+export function retryAfterMs(value, now = Date.now()) {
+	if (!value) return undefined;
+	const text = value.trim();
+	if (/^\d+$/.test(text)) return Number(text) * 1000;
+	const date = Date.parse(text);
+	return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }
 
 /**
@@ -76,7 +99,7 @@ export function definitive(status) {
  */
 export async function readLiveText(url, sink, signal, fetcher) {
 	const response = await fetcher(url, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal });
-	if (!response.ok || !response.body) throw new LiveTextStatusError(response.status);
+	if (!response.ok || !response.body) throw new LiveTextStatusError(response.status, retryAfterMs(response.headers.get('Retry-After')));
 	const reader = response.body.getReader();
 	sink.start();
 	try {
@@ -94,7 +117,9 @@ export async function readLiveText(url, sink, signal, fetcher) {
  * Follows live text until it ends, the server refuses it for good, or
  * `signal` aborts. After a failure or a drop it tries again, waiting longer
  * each time it fails before a response starts (`retryMs`); a response that
- * started and then dropped starts the waits over.
+ * started and then dropped starts the waits over. It waits at least as long
+ * as the server's `Retry-After` asks, up to `MAX_RETRY_AFTER_MS`: each try
+ * may count against the server's limits on connecting.
  * @param {string} url
  * @param {LiveTextSink} sink
  * @param {AbortSignal} signal
@@ -121,7 +146,8 @@ export async function followLiveText(url, sink, signal, { retryMs = LIVE_RETRY_M
 			const status = cause instanceof LiveTextStatusError ? cause.status : undefined;
 			if (status !== undefined && definitive(status)) return { how: 'refused', status };
 			failures = started ? 1 : failures + 1;
-			const delay = retryMs[Math.min(failures, retryMs.length) - 1] ?? 0;
+			const asked = cause instanceof LiveTextStatusError ? cause.retryAfterMs : undefined;
+			const delay = Math.max(retryMs[Math.min(failures, retryMs.length) - 1] ?? 0, Math.min(asked ?? 0, MAX_RETRY_AFTER_MS));
 			sink.retrying?.({ failures, delay, ...(status !== undefined ? { status } : {}) });
 			await pause(delay, signal);
 		}

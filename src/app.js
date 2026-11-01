@@ -5,6 +5,11 @@
  * (src/screen.js), as apron-web's terminal viewer does. Without a stream, it
  * says what it is and takes one pasted in.
  *
+ * It also replays recordings in other tools' formats, and saves in them
+ * (src/formats.js): an asciicast from `#cast=<url>`, or any file opened or
+ * dropped on the page; the output it shows, as an asciicast or a VHS golden
+ * file.
+ *
  * In an iframe, or with `embed=1`, it is a terminal embed in a chat message:
  * a slim bar and a screen that shows only the rows written, with no
  * scrollback, and it talks to the page around it (src/embed.js).
@@ -15,12 +20,16 @@
  */
 import { Terminal } from './xterm.mjs';
 import { followLiveText, liveTextDecoder } from './live.js';
-import { INLINE_FIT, SCROLLBACK, TerminalScreen, VIEWER_FIT } from './screen.js';
+import { EMBED_SIZE, INLINE_FIT, SCROLLBACK, TerminalScreen, VIEWER_FIT } from './screen.js';
+import { CAST_TYPE, parseRecording, Recorder, replayDelays, writeCast, writeGolden } from './formats.js';
 import { checkStreamUrl, isLoopback, parseLocation, viewerUrl } from './stream.js';
 import { isFramed, outputOf, READY, reportHeight, watchSight } from './embed.js';
 
 /** @typedef {import('./stream.js').Reason} Reason */
 /** @typedef {import('./stream.js').View} View */
+/** @typedef {import('./formats.js').Recording} Recording */
+/** @typedef {import('./screen.js').TerminalSize} TerminalSize */
+/** @typedef {{ text: string, state: string, detail?: string }} Status */
 
 const REPOSITORY = 'https://github.com/apron-chat/terminal.apron.chat';
 const PROTOCOL = 'https://github.com/shazow/apron/blob/main/PROTOCOL.md#486-embedterminal';
@@ -43,6 +52,8 @@ const sourceElement = /** @type {HTMLElement} */ (document.getElementById('sourc
 const statusElement = /** @type {HTMLElement} */ (document.getElementById('status'));
 const copyButton = /** @type {HTMLButtonElement} */ (document.getElementById('copy'));
 const openLink = /** @type {HTMLAnchorElement} */ (document.getElementById('open'));
+const skipButton = /** @type {HTMLButtonElement} */ (document.getElementById('skip'));
+const saveMenu = /** @type {HTMLDetailsElement} */ (document.getElementById('save'));
 const root = document.documentElement;
 const brandLink = /** @type {HTMLAnchorElement} */ (document.querySelector('.brand'));
 const framed = isFramed(window);
@@ -57,6 +68,8 @@ const readOptions = { local: isLoopback(location.hostname) };
 const PAUSE_AFTER_MS = 15_000;
 /** @param {object} message */
 const post = (message) => window.parent.postMessage(message, '*');
+/** The largest recording the page opens, from a file or a link: some 20 MB. */
+const MAX_RECORDING = 20 * 1024 * 1024;
 
 /** Ends what the page shows now: its stream's reading and screen. */
 let teardown = () => {};
@@ -64,6 +77,11 @@ let teardown = () => {};
 let receiveOutput = (/** @type {string} */ _output) => {};
 /** What the page shows now, but for its theme: a change of theme alone doesn't start it afresh. */
 let shownKey = '';
+/**
+ * What Save writes, for what the page shows now: its recording so far, and its screen's rows.
+ * @type {{ title?: string, size: TerminalSize, recorded: () => Pick<Recording, 'events' | 'timestamp'>, rows: () => string[] } | undefined}
+ */
+let saving;
 
 /**
  * Makes an element. `attrs` are set with `setAttribute`, so they are values,
@@ -80,18 +98,18 @@ function h(tag, attrs = {}, ...children) {
 }
 
 /**
- * Shows what the page is in the bar: a title, where it streams from, and a status.
- * @param {{ title?: string, host?: string, status?: { text: string, state: string, detail?: string } }} bar
+ * Shows what the page is in the bar: a title, where it comes from (`Streaming from` a host, by default), and a status.
+ * @param {{ title?: string, host?: string, from?: string, status?: Status }} bar
  */
-function setBar({ title, host, status }) {
+function setBar({ title, host, from = 'Streaming from', status }) {
 	titleElement.textContent = title ?? NAME;
 	document.title = title || host ? `${title ?? 'Terminal'}${host ? ` · ${host}` : ''}` : NAME;
 	sourceElement.hidden = !host;
-	sourceElement.replaceChildren(...(host ? ['Streaming from ', h('strong', {}, host)] : []));
+	sourceElement.replaceChildren(...(host ? [`${from} `, h('strong', {}, host)] : []));
 	setStatus(status);
 }
 
-/** @param {{ text: string, state: string, detail?: string } | undefined} status */
+/** @param {Status | undefined} status */
 function setStatus(status) {
 	statusElement.hidden = !status;
 	statusElement.textContent = status?.text ?? '';
@@ -109,11 +127,7 @@ function render() {
 	const key = JSON.stringify([parsed.kind, parsed.kind === 'invalid' ? parsed.reason : '', rest]);
 	if (key === shownKey) return;
 	shownKey = key;
-	teardown();
-	teardown = () => {};
-	receiveOutput = () => {};
-	copyButton.hidden = true;
-	openLink.hidden = true;
+	clear();
 	const embed = framed || look.embed;
 	root.toggleAttribute('data-embed', embed);
 	// In a chat message, a link opens beside it, never in its place.
@@ -121,10 +135,21 @@ function render() {
 		brandLink.target = '_blank';
 		brandLink.rel = 'noopener';
 	} else brandLink.removeAttribute('target');
-	if (parsed.kind === 'view') showView(parsed.view, embed);
+	if (parsed.kind === 'view' && parsed.view.cast) void showCast(parsed.view, embed);
+	else if (parsed.kind === 'view') showView(parsed.view, embed);
 	else showMessage(parsed, embed);
 	// Anything shown before is gone, an output sent in with it too: the parent sends it (again) on this.
 	if (framed) post({ type: READY });
+}
+
+/** Ends what the page shows, and hides what belongs to it. */
+function clear() {
+	teardown();
+	teardown = () => {};
+	receiveOutput = () => {};
+	saving = undefined;
+	for (const control of [copyButton, openLink, skipButton, saveMenu]) control.hidden = true;
+	saveMenu.open = false;
 }
 
 /**
@@ -146,6 +171,7 @@ function showMessage(parsed, embed) {
 				h('p', {}, 'This page shows the output of a program, such as a build or a test run, live as it runs, the way an Apron chat shows a terminal. Links to it come from chat servers, for apps that can\'t show terminals themselves.'),
 				h('p', { class: 'muted' }, 'The stream\'s address stays after the # in this page\'s address, so it never reaches this site. The page reads it straight from the chat server, without signing in.'),
 				openForm(),
+				fileForm(),
 				h('p', { class: 'muted' }, h('a', { href: PROTOCOL, target: '_blank', rel: 'noopener' }, 'How terminal embeds work'), ' · ', h('a', { href: REPOSITORY, target: '_blank', rel: 'noopener' }, 'Source'))
 			)
 		);
@@ -158,6 +184,18 @@ function showMessage(parsed, embed) {
 			openForm()
 		)
 	);
+}
+
+/** A button to open a recording from a file, which can be dropped on the page too. */
+function fileForm() {
+	const input = /** @type {HTMLInputElement} */ (h('input', { type: 'file', accept: '.cast,.txt,.log,.ans,text/plain,application/x-asciicast', hidden: '' }));
+	input.addEventListener('change', () => {
+		const file = input.files?.[0];
+		if (file) void openFile(file);
+	});
+	const button = h('button', { class: 'button', type: 'button' }, 'Open a file');
+	button.addEventListener('click', () => input.click());
+	return h('p', { class: 'muted open-file' }, button, input, ' or drop one here: an asciinema recording (.cast) or a terminal\'s output. It stays in your browser.');
 }
 
 /** A box to paste a stream's address, or a terminal.apron.chat link, into. */
@@ -180,7 +218,8 @@ function openForm() {
 			field.focus();
 			return;
 		}
-		location.hash = viewerUrl('', { url: checked.toString() }).slice(2);
+		// An address that ends in .cast is a recording to replay.
+		location.hash = viewerUrl('', { url: checked.toString(), cast: checked.pathname.endsWith('.cast') }).slice(2);
 	});
 	return h('div', { class: 'open-box' }, form, error);
 }
@@ -202,11 +241,9 @@ function showView(view, embed) {
 		openLink.hidden = false;
 	}
 
-	const screenHost = h('div', { class: 'screen', dir: 'ltr', 'data-testid': 'screen' });
-	const note = h('p', { class: 'note', role: 'status', hidden: '' });
-	const stage = h('div', { class: 'stage' }, screenHost, note);
-	app.replaceChildren(stage);
-	const screen = new TerminalScreen(Terminal, screenHost, embed ? { space: stage, fit: INLINE_FIT } : { space: stage, fit: VIEWER_FIT, scrollback: SCROLLBACK, keys: document });
+	const { screen, screenHost, stage, showNote, dispose } = mountScreen(embed, EMBED_SIZE);
+	const recorder = new Recorder();
+	saving = { ...(view.title ? { title: view.title } : {}), size: EMBED_SIZE, recorded: () => recorder.recorded, rows: () => screen.screenRows() };
 	/** Set once nothing more will come: the output ended, the server refused it, or the parent sent the output. */
 	let done = false;
 	/** @type {AbortController | undefined} The reading now, if any. */
@@ -215,20 +252,11 @@ function showView(view, embed) {
 		reading?.abort();
 		reading = undefined;
 	};
-	const copy = () => void copyText(screen.text());
-	copyButton.addEventListener('click', copy);
 	let unwatch = () => {};
 	teardown = () => {
 		stopReading();
 		unwatch();
-		copyButton.removeEventListener('click', copy);
-		screen.dispose();
-	};
-
-	/** @param {string} [text] */
-	const showNote = (text) => {
-		note.hidden = !text;
-		note.textContent = text ?? '';
+		dispose();
 	};
 
 	// The embed's output, once a snapshot carries it: the stream has ended, and this is what was kept of it.
@@ -236,8 +264,10 @@ function showView(view, embed) {
 		done = true;
 		stopReading();
 		screen.show(output);
+		recorder.replace(output);
 		screenHost.hidden = false;
 		copyButton.hidden = !output;
+		saveMenu.hidden = embed || !output;
 		showNote(output ? undefined : 'The program ended without any output.');
 		bar({ text: 'Finished', state: 'ended', detail: 'The program\'s output has ended.' });
 	};
@@ -255,6 +285,7 @@ function showView(view, embed) {
 				// A new response holds the text from its start: it replaces what was shown.
 				decoder = liveTextDecoder();
 				received = 0;
+				recorder.reset();
 				screen.reset();
 				showNote();
 				bar({ text: 'Live', state: 'live' });
@@ -262,7 +293,10 @@ function showView(view, embed) {
 			chunk: (bytes) => {
 				received += bytes.byteLength;
 				copyButton.hidden = false;
-				screen.write(decoder.decode(bytes, { stream: true }));
+				saveMenu.hidden = embed;
+				const text = decoder.decode(bytes, { stream: true });
+				recorder.add(text);
+				screen.write(text);
 			},
 			retrying: ({ failures, delay, status }) => {
 				const wait = `Trying again in ${Math.round(delay / 1000)} s.`;
@@ -275,7 +309,9 @@ function showView(view, embed) {
 			reading = undefined;
 			done = true;
 			if (outcome.how === 'ended') {
-				screen.write(decoder.decode());
+				const rest = decoder.decode();
+				recorder.add(rest);
+				screen.write(rest);
 				bar({ text: 'Ended', state: 'ended', detail: 'The program\'s output has ended.' });
 				if (!received) {
 					screenHost.hidden = true;
@@ -312,6 +348,184 @@ function showView(view, embed) {
 }
 
 /**
+ * A screen of `size` in the page, as the full page or an embed shows it, with Copy wired to it.
+ * @param {boolean} embed
+ * @param {TerminalSize} size
+ */
+function mountScreen(embed, size) {
+	const screenHost = h('div', { class: 'screen', dir: 'ltr', 'data-testid': 'screen' });
+	const note = h('p', { class: 'note', role: 'status', hidden: '' });
+	const stage = h('div', { class: 'stage' }, screenHost, note);
+	app.replaceChildren(stage);
+	const screen = new TerminalScreen(Terminal, screenHost, embed ? { space: stage, fit: INLINE_FIT, size } : { space: stage, fit: VIEWER_FIT, scrollback: SCROLLBACK, keys: document, size });
+	const copy = () => void copyText(screen.text());
+	copyButton.addEventListener('click', copy);
+	return {
+		screen,
+		screenHost,
+		stage,
+		/** @param {string} [text] */
+		showNote: (text) => {
+			note.hidden = !text;
+			note.textContent = text ?? '';
+		},
+		dispose: () => {
+			copyButton.removeEventListener('click', copy);
+			screen.dispose();
+		}
+	};
+}
+
+/**
+ * Loads the recording at `view.url` (`#cast=`), and replays it.
+ * @param {View} view
+ * @param {boolean} embed
+ */
+async function showCast(view, embed) {
+	const url = /** @type {string} */ (view.url);
+	const host = /** @type {string} */ (view.host);
+	const key = shownKey;
+	const from = 'Recording from';
+	setBar({ ...(view.title ? { title: view.title } : {}), host, from, status: { text: 'Loading…', state: 'connecting' } });
+	app.replaceChildren();
+	const controller = new AbortController();
+	teardown = () => controller.abort();
+	/** @param {string} text */
+	const fail = (text) => {
+		setBar({ ...(view.title ? { title: view.title } : {}), host, from, status: { text: 'Unavailable', state: 'failed' } });
+		app.replaceChildren(h('p', { class: 'note' }, text));
+	};
+	let text;
+	try {
+		const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal });
+		if (!response.ok) return fail(`${host} answered ${response.status} for this recording.`);
+		if (Number(response.headers.get('Content-Length')) > MAX_RECORDING) return fail('This recording is too large to open here.');
+		text = await response.text();
+	} catch {
+		if (controller.signal.aborted) return;
+		return fail(`Couldn't load this recording from ${host}. It may not let other sites read it.`);
+	}
+	if (shownKey !== key) return;
+	/** @type {Recording} */
+	let recording;
+	try {
+		if (text.length > MAX_RECORDING) throw new Error('This recording is too large to open here.');
+		recording = parseRecording(text);
+	} catch (error) {
+		return fail(error instanceof Error ? error.message : String(error));
+	}
+	const title = view.title ?? recording.title;
+	showRecording(recording, { ...(title ? { title } : {}), host, from }, embed);
+}
+
+/**
+ * Opens a recording from a file the viewer chose or dropped: it stays in the browser.
+ * @param {File} file
+ */
+async function openFile(file) {
+	if (file.size > MAX_RECORDING) {
+		window.alert('This file is too large to open here.');
+		return;
+	}
+	/** @type {Recording} */
+	let recording;
+	try {
+		recording = parseRecording(await file.text());
+	} catch (error) {
+		window.alert(error instanceof Error ? error.message : String(error));
+		return;
+	}
+	// The address no longer says what the page shows; going back to a link shows it again.
+	if (location.hash) history.pushState(null, '', location.pathname);
+	clear();
+	shownKey = `file:${file.name}`;
+	root.removeAttribute('data-embed');
+	showRecording(recording, { title: recording.title ?? file.name, host: file.name, from: 'Opened from' }, false);
+}
+
+/**
+ * Shows a recording: an asciicast replayed at its own pace, with pauses
+ * capped and Skip to its end; output, at once.
+ * @param {Recording} recording
+ * @param {{ title?: string, host: string, from: string }} source
+ * @param {boolean} embed
+ */
+function showRecording(recording, { title, host, from }, embed) {
+	const { screen, showNote, dispose } = mountScreen(embed, recording.size);
+	saving = { ...(title ? { title } : {}), size: recording.size, recorded: () => recording, rows: () => screen.screenRows() };
+	/** @param {Status} status */
+	const bar = (status) => setBar({ ...(title ? { title } : {}), host, from, status });
+	const detail = `${recording.size.cols}×${recording.size.rows}`;
+	const finish = () => {
+		skipButton.hidden = true;
+		bar({ text: recording.format === 'asciicast' ? 'Replayed' : 'Output', state: 'ended', detail });
+		const empty = !recording.events.some(([, text]) => text);
+		copyButton.hidden = empty;
+		saveMenu.hidden = embed || empty;
+		if (empty) showNote('This recording has no output.');
+	};
+	/** @type {ReturnType<typeof setTimeout> | undefined} */
+	let timer;
+	let next = 0;
+	const skip = () => {
+		clearTimeout(timer);
+		screen.write(recording.events.slice(next).map(([, text]) => text).join(''));
+		next = recording.events.length;
+		finish();
+	};
+	skipButton.addEventListener('click', skip);
+	teardown = () => {
+		clearTimeout(timer);
+		skipButton.removeEventListener('click', skip);
+		dispose();
+	};
+	if (recording.format !== 'asciicast' || recording.events.length < 2) return skip();
+	const delays = replayDelays(recording);
+	skipButton.hidden = false;
+	copyButton.hidden = false;
+	bar({ text: 'Replaying', state: 'live', detail });
+	const step = () => {
+		screen.write(recording.events[next][1]);
+		next++;
+		if (next >= recording.events.length) return finish();
+		timer = setTimeout(step, delays[next]);
+	};
+	timer = setTimeout(step, delays[0]);
+}
+
+/**
+ * Saves what the page shows in a format of another tool's: an asciicast
+ * (version 3) of the output so far, with its timing, or a VHS golden file of
+ * the screen as it is.
+ * @param {string} format `cast` or `golden`
+ */
+function save(format) {
+	if (!saving) return;
+	const name = (saving.title ?? 'terminal').replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'terminal';
+	if (format === 'cast') {
+		const { events, timestamp } = saving.recorded();
+		download(`${name}.cast`, CAST_TYPE, writeCast({ size: saving.size, events, ...(saving.title ? { title: saving.title } : {}), ...(timestamp !== undefined ? { timestamp } : {}) }));
+	} else {
+		download(`${name}.txt`, 'text/plain', writeGolden(saving.rows()));
+	}
+}
+
+/**
+ * Hands the viewer a file to save.
+ * @param {string} name
+ * @param {string} type
+ * @param {string} text
+ */
+function download(name, type, text) {
+	const url = URL.createObjectURL(new Blob([text], { type: `${type};charset=utf-8` }));
+	const link = h('a', { href: url, download: name, hidden: '' });
+	document.body.append(link);
+	link.click();
+	link.remove();
+	setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
  * Copies text, saying so on the Copy button for a moment.
  * @param {string} text
  */
@@ -329,6 +543,34 @@ async function copyText(text) {
 }
 
 addEventListener('hashchange', render);
+// Going back to the link after opening a file shows it again.
+addEventListener('popstate', () => {
+	shownKey = '';
+	render();
+});
+saveMenu.addEventListener('click', (event) => {
+	const item = /** @type {HTMLElement | null} */ (event.target instanceof Element ? event.target.closest('[data-format]') : null);
+	if (!item) return;
+	save(item.dataset.format ?? '');
+	saveMenu.open = false;
+});
+// A file dropped on the full page opens as a recording; a page in a chat message takes none.
+addEventListener('dragover', (event) => {
+	if (framed || !event.dataTransfer?.types.includes('Files')) return;
+	event.preventDefault();
+	root.dataset.dropping = '';
+});
+addEventListener('dragleave', (event) => {
+	if (!event.relatedTarget) delete root.dataset.dropping;
+});
+addEventListener('drop', (event) => {
+	delete root.dataset.dropping;
+	const file = event.dataTransfer?.files[0];
+	if (framed || !file) return;
+	event.preventDefault();
+	void openFile(file);
+});
+
 addEventListener('message', (event) => {
 	// Only the page that shows this one, from any origin: whoever chose to. Not in a frame, the parent is the page
 	// itself, as for a native app's WebView that runs `window.postMessage(…)` in it.

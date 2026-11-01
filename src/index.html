@@ -23,7 +23,15 @@
 			<p id="source" class="source" hidden></p>
 		</div>
 		<span id="status" class="status" role="status" hidden></span>
+		<button id="skip" class="button" type="button" hidden>Skip</button>
 		<button id="copy" class="button" type="button" hidden>Copy</button>
+		<details id="save" class="menu" hidden>
+			<summary class="button">Save</summary>
+			<div class="menu-list">
+				<button type="button" class="menu-item" data-format="cast">asciicast <span class="muted">.cast</span></button>
+				<button type="button" class="menu-item" data-format="golden">VHS golden <span class="muted">.txt</span></button>
+			</div>
+		</details>
 		<a id="open" class="button" target="_blank" rel="noopener noreferrer" hidden>Open</a>
 	</header>
 	<main id="app" class="app" tabindex="-1">

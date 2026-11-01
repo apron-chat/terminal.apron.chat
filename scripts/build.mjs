@@ -16,7 +16,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'build');
 
 /** Files copied from src/ as they are. */
-export const PAGE_FILES = ['index.html', '404.html', 'style.css', 'app.js', 'stream.js', 'live.js', 'screen.js', 'embed.js', 'logo.svg', 'robots.txt'];
+export const PAGE_FILES = ['index.html', '404.html', 'style.css', 'app.js', 'stream.js', 'live.js', 'screen.js', 'embed.js', 'formats.js', 'logo.svg', 'robots.txt'];
 
 /**
  * Where the page may read a stream from: any https origin. Live text is

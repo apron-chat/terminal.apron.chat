@@ -9,6 +9,8 @@ chat client that doesn't draw terminals itself.
 https://terminal.apron.chat/#stream=https://chat.example/t/p3Wn9d…&title=make%20test
 ```
 
+![A release run streaming live on terminal.apron.chat: a gradient APRON banner, lint, test progress bars, a benchmark table and build outputs, under a bar that says make release, Streaming from localhost:8789, Live.](docs/screenshot.png)
+
 The page reads the stream and draws it the way web.apron.chat's terminal viewer
 does: xterm.js at 80 columns by 40 rows, scaled to fit, with scrollback. It
 follows the output live, reconnects when the connection drops, and keeps
@@ -83,6 +85,8 @@ limits how many times a stream is read in all (15 to 30). Past that it answers
 A client that doesn't parse terminal output itself can show a `terminal`
 embed by putting this page in an iframe, in place of its own screen. In a
 frame, the page switches to a compact layout for a chat message:
+
+![The same run embedded in a chat message from Ada, in the light theme: a slim bar with make release, Live, Copy and Open, above the terminal sized to the message.](docs/embed.png)
 
 - a slim bar with the title, Live, Ended or Finished, Copy, and Open (the full
   page in a new tab, with scrollback);
@@ -212,7 +216,7 @@ version that apron-web uses.
 npm ci
 npm test               # link parsing, stream reading, screen sizing, and build checks
 npm run dev            # build, then serve at http://localhost:8789 with production's headers, plus localhost streams
-DEMO=1 npm run dev     # the same, with a demo stream at /demo and a link to view it
+DEMO=1 npm run dev     # the same, with a demo stream at /demo (scripts/demo.mjs) and a link to view it
 npm run build          # write the site to build/
 ```
 
@@ -223,11 +227,24 @@ npm run build          # write the site to build/
 | `src/screen.js` | the terminal screen: xterm.js, fitted to the window or the frame, with or without scrollback |
 | `src/embed.js` | the page in an iframe: the messages it sends and takes |
 | `src/app.js` | the page |
+| `scripts/demo.mjs` | the demo run: colors, a banner, progress bars and a table, as a program writes them |
+| `scripts/screenshot.mjs` | takes `docs/screenshot.png` and `docs/embed.png` of the demo, live |
 | `scripts/build.mjs` | builds `build/`: the page, `xterm.mjs` and `xterm.css` from `node_modules`, and `_headers` |
 
 `src/live.js` and `src/screen.js` follow apron-web's
 `src/lib/protocol/live-text.ts` and `src/lib/ui/terminal-screen.ts`. When you
 change how terminals look or read in one place, change the other to match.
+
+### Screenshots
+
+`docs/screenshot.png` and `docs/embed.png` are the demo run, streamed live
+and held open, taken in Chromium. After changing how the page looks, retake
+them:
+
+```sh
+npm install --no-save playwright && npx playwright install chromium
+node scripts/screenshot.mjs
+```
 
 ## Deploying
 

@@ -1,0 +1,23 @@
+name = "terminal-apron-chat"
+compatibility_date = "2026-10-15"
+workers_dev = false
+# Production is served only on the custom domain below. Pull request
+# Previews (Workers Builds) are served at <branch>-terminal-apron-chat.shazow.workers.dev.
+preview_urls = true
+previews = { }
+routes = [
+  { pattern = "terminal.apron.chat", custom_domain = true }
+]
+# Static assets only: there is no `main`, so no Worker code runs. The stream's
+# address stays in the URL fragment and never reaches this host.
+# test/static.test.mjs keeps it so.
+
+# Wrangler builds the site before every deploy, version upload and `wrangler dev`,
+# whatever build command Workers Builds is given, so build/ is never missing or stale.
+[build]
+command = "npm run build"
+watch_dir = ["src", "scripts"]
+
+[assets]
+directory = "./build"
+not_found_handling = "404-page"

@@ -16,7 +16,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'build');
 
 /** Files copied from src/ as they are. */
-export const PAGE_FILES = ['index.html', '404.html', 'style.css', 'app.js', 'stream.js', 'live.js', 'screen.js', 'logo.svg', 'robots.txt'];
+export const PAGE_FILES = ['index.html', '404.html', 'style.css', 'app.js', 'stream.js', 'live.js', 'screen.js', 'embed.js', 'logo.svg', 'robots.txt'];
 
 /**
  * Where the page may read a stream from: any https origin, and http only on
@@ -33,6 +33,11 @@ export const CONNECT_SOURCES = ['https:', 'http://localhost:*', 'http://*.localh
  * sinks (Trusted Types): a stream's bytes only ever reach the page as
  * terminal cells. Inline styles are allowed because xterm.js sizes and colors
  * its screen with `<style>` elements and `style` attributes it writes itself.
+ *
+ * Any page may show it in a frame (README.md, Embedding): it has nothing to
+ * click that acts for its viewer. Its files may be read from any origin,
+ * because in a sandboxed iframe without `allow-same-origin` the page's origin
+ * is opaque, and a module script, and each module it imports, loads with CORS.
  */
 export const HEADERS = {
 	'Content-Security-Policy': [
@@ -43,7 +48,7 @@ export const HEADERS = {
 		`connect-src ${CONNECT_SOURCES.join(' ')}`,
 		"base-uri 'none'",
 		"form-action 'none'",
-		"frame-ancestors 'none'",
+		'frame-ancestors *',
 		"require-trusted-types-for 'script'",
 		"trusted-types 'none'"
 	].join('; '),
@@ -51,6 +56,7 @@ export const HEADERS = {
 	'Referrer-Policy': 'no-referrer',
 	'X-Content-Type-Options': 'nosniff',
 	'Cross-Origin-Opener-Policy': 'same-origin',
+	'Access-Control-Allow-Origin': '*',
 	'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=()'
 };
 

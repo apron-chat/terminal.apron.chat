@@ -5,17 +5,22 @@
  * (src/screen.js), as apron-web's terminal viewer does. Without a stream, it
  * says what it is and takes one pasted in.
  *
+ * In an iframe, or with `embed=1`, it is a terminal embed in a chat message:
+ * a slim bar and a screen that shows only the rows written, with no
+ * scrollback, and it talks to the page around it (src/embed.js).
+ *
  * All markup is built with DOM calls and `textContent`: the page's CSP
  * forbids the HTML sinks (Trusted Types), and a stream's bytes only ever
  * reach xterm's cells.
  */
 import { Terminal } from './xterm.mjs';
 import { followLiveText, liveTextDecoder } from './live.js';
-import { TerminalScreen } from './screen.js';
+import { INLINE_FIT, SCROLLBACK, TerminalScreen, VIEWER_FIT } from './screen.js';
 import { checkStreamUrl, parseLocation, viewerUrl } from './stream.js';
+import { isFramed, outputOf, READY, reportHeight } from './embed.js';
 
 /** @typedef {import('./stream.js').Reason} Reason */
-/** @typedef {import('./stream.js').Stream} Stream */
+/** @typedef {import('./stream.js').View} View */
 
 const REPOSITORY = 'https://github.com/apron-chat/terminal.apron.chat';
 const PROTOCOL = 'https://github.com/shazow/apron/blob/main/PROTOCOL.md#486-embedterminal';
@@ -36,9 +41,14 @@ const titleElement = /** @type {HTMLElement} */ (document.getElementById('title'
 const sourceElement = /** @type {HTMLElement} */ (document.getElementById('source'));
 const statusElement = /** @type {HTMLElement} */ (document.getElementById('status'));
 const copyButton = /** @type {HTMLButtonElement} */ (document.getElementById('copy'));
+const openLink = /** @type {HTMLAnchorElement} */ (document.getElementById('open'));
+const root = document.documentElement;
+const framed = isFramed(window);
 
 /** Ends what the page shows now: its stream's reading and screen. */
 let teardown = () => {};
+/** Takes a finished output from the parent page, for what the page shows now (src/embed.js). */
+let receiveOutput = (/** @type {string} */ _output) => {};
 
 /**
  * Makes an element. `attrs` are set with `setAttribute`, so they are values,
@@ -78,10 +88,22 @@ function setStatus(status) {
 function render() {
 	teardown();
 	teardown = () => {};
+	receiveOutput = () => {};
 	copyButton.hidden = true;
+	openLink.hidden = true;
 	const parsed = parseLocation(location);
-	if (parsed.kind === 'stream') return showStream(parsed.stream);
+	const look = parsed.kind === 'view' ? parsed.view : parsed.kind === 'invalid' ? parsed : { embed: false };
+	const embed = framed || look.embed;
+	root.toggleAttribute('data-embed', embed);
+	if (look.theme) root.dataset.theme = look.theme;
+	else delete root.dataset.theme;
+	if (parsed.kind === 'view') return showView(parsed.view, embed);
 	setBar({});
+	if (parsed.kind === 'invalid' && embed) {
+		// In a chat message, no form: what is wrong, for whoever made the link.
+		app.replaceChildren(h('p', { class: 'note' }, REASONS[parsed.reason]));
+		return;
+	}
 	if (parsed.kind === 'empty') {
 		app.replaceChildren(
 			h('section', { class: 'card' },
@@ -129,20 +151,27 @@ function openForm() {
 }
 
 /**
- * Follows `stream` and draws it, until the address changes.
- * @param {Stream} stream
+ * Follows the stream and draws it, until the address changes. In an embed,
+ * a finished output from the parent page replaces it.
+ * @param {View} view
+ * @param {boolean} embed
  */
-function showStream(stream) {
-	const host = stream.host;
+function showView(view, embed) {
+	const { url, host } = view;
 	/** @param {{ text: string, state: string, detail?: string }} [status] */
-	const bar = (status) => setBar({ ...(stream.title ? { title: stream.title } : {}), host, ...(status ? { status } : {}) });
-	bar({ text: 'Connecting…', state: 'connecting' });
+	const bar = (status) => setBar({ ...(view.title ? { title: view.title } : {}), ...(host ? { host } : {}), ...(status ? { status } : {}) });
+	bar(url ? { text: 'Connecting…', state: 'connecting' } : undefined);
+	if (embed && url) {
+		// The full page, in a tab of its own, with scrollback.
+		openLink.href = viewerUrl(location.origin, { url, ...(view.title ? { title: view.title } : {}), ...(view.theme ? { theme: view.theme } : {}) });
+		openLink.hidden = false;
+	}
 
 	const screenHost = h('div', { class: 'screen', dir: 'ltr', 'data-testid': 'screen' });
 	const note = h('p', { class: 'note', role: 'status', hidden: '' });
 	const stage = h('div', { class: 'stage' }, screenHost, note);
 	app.replaceChildren(stage);
-	const screen = new TerminalScreen(Terminal, screenHost, stage, document);
+	const screen = new TerminalScreen(Terminal, screenHost, embed ? { space: stage, fit: INLINE_FIT } : { space: stage, fit: VIEWER_FIT, scrollback: SCROLLBACK, keys: document });
 	const controller = new AbortController();
 	const copy = () => void copyText(screen.text());
 	copyButton.addEventListener('click', copy);
@@ -158,10 +187,21 @@ function showStream(stream) {
 		note.textContent = text ?? '';
 	};
 
+	// The embed's output, once a snapshot carries it: the stream has ended, and this is what was kept of it.
+	receiveOutput = (output) => {
+		controller.abort();
+		screen.show(output);
+		screenHost.hidden = false;
+		copyButton.hidden = !output;
+		showNote(output ? undefined : 'The program ended without any output.');
+		bar({ text: 'Finished', state: 'ended', detail: 'The program\'s output has ended.' });
+	};
+	if (!url) return;
+
 	let decoder = liveTextDecoder();
 	/** Bytes the current response has brought. */
 	let received = 0;
-	void followLiveText(stream.url, {
+	void followLiveText(url, {
 		start: () => {
 			// A new response holds the text from its start: it replaces what was shown.
 			decoder = liveTextDecoder();
@@ -224,4 +264,16 @@ async function copyText(text) {
 }
 
 addEventListener('hashchange', render);
+addEventListener('message', (event) => {
+	// Only the page that shows this one, from any origin: whoever chose to. Not in a frame, the parent is the page
+	// itself, as for a native app's WebView that runs `window.postMessage(…)` in it.
+	if (event.source !== window.parent) return;
+	const output = outputOf(event.data);
+	if (output !== undefined) receiveOutput(output);
+});
+if (framed) {
+	const post = (/** @type {object} */ message) => window.parent.postMessage(message, '*');
+	reportHeight(document.body, post);
+	post({ type: READY });
+}
 render();

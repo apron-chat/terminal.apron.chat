@@ -22,6 +22,10 @@ test('the build holds only the expected files', () => {
 	assert.match(headers, /connect-src https: http:\/\/localhost:\* http:\/\/\*\.localhost:\* http:\/\/127\.0\.0\.1:\*;/);
 	for (const source of CONNECT_SOURCES) assert.doesNotMatch(source, /\[/, 'CSP sources cannot name an IPv6 address');
 	assert.match(headers, /trusted-types 'none'/);
+	// Any page may frame it, sandboxed too: its modules then load with CORS from an opaque origin.
+	assert.match(headers, /frame-ancestors \*;/);
+	assert.match(headers, /^ {2}Access-Control-Allow-Origin: \*$/m);
+	assert.doesNotMatch(headers, /X-Frame-Options/i);
 	assert.match(headers, /Referrer-Policy: no-referrer/);
 	const xterm = readFileSync(join(out, 'xterm.mjs'), 'utf8');
 	assert.match(xterm, /^\/\*\*\n \* Copyright \(c\) 2014-2024 The xterm\.js authors\. All rights reserved\.\n \* @license MIT/, 'xterm.mjs keeps its license');

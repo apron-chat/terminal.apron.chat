@@ -1,15 +1,18 @@
 // @ts-check
 /**
- * The terminal screen, as apron-web's full-screen terminal viewer draws it
+ * The terminal screen, as apron-web draws a terminal embed
  * (src/lib/ui/terminal-screen.ts): xterm.js, 80 columns by 40 rows
  * (PROTOCOL.md §4.8.6). It only reads: no input, and nothing a program prints
  * acts outside it. It never sends xterm's replies anywhere, ignores title
  * changes, the bell and the clipboard (OSC 52), and opens no links (OSC 8).
- * The font is scaled so the 80 columns fit the width, and the 40 rows the
- * height where it is tall enough, never below a readable size. Rows below the
- * last one written are hidden, unless a program is using the alternate
- * screen. It keeps `SCROLLBACK` lines that scroll off the top, to scroll back
- * through.
+ * The font is scaled so the 80 columns fit the space it has (`TerminalFit`).
+ * Rows below the last one written are hidden, unless a program is using the
+ * alternate screen.
+ *
+ * Two fits, as in apron-web: the full page is its full-screen viewer
+ * (`VIEWER_FIT`, with `SCROLLBACK` lines to scroll back through); a frame in
+ * a chat message is its screen in a message (`INLINE_FIT`, no scrollback: a
+ * wheel or swipe over it scrolls the page around it).
  *
  * This module doesn't load xterm.js: the page passes its `Terminal` in, so
  * the functions here run in tests without a browser.
@@ -23,23 +26,53 @@
 
 export const TERMINAL_COLS = 80;
 export const TERMINAL_ROWS = 40;
-/** The smallest font: readable on a phone. A narrower space scrolls sideways. */
-export const FONT_MIN = 9;
-/** The largest, for a big screen. */
-export const FONT_MAX = 24;
-/** The rows fit the height down to this size; a shorter space (a phone on its side) keeps it and scrolls. */
-export const FONT_ROWS_MIN = 13;
-/** The lines that scroll off the top it keeps, to scroll back through: some 5 MB of xterm's buffer at most. */
+
+/**
+ * How a screen's font fits its space: between `min` and `max`, its 80
+ * columns in the width, and with `rows` its 40 rows in the height too, down
+ * to that size (a shorter space keeps it and scrolls).
+ * @typedef {{ min: number, max: number, rows?: number }} TerminalFit
+ */
+
+/** In a message: the columns in the width, small as that is on a phone (the page never scrolls sideways). */
+export const INLINE_FIT = /** @type {TerminalFit} */ ({ min: 4, max: 13 });
+/** Full page: 80 by 40, as large as fits, but never too small to read; a narrower space scrolls sideways. */
+export const VIEWER_FIT = /** @type {TerminalFit} */ ({ min: 9, max: 24, rows: 13 });
+
+/** The lines that scroll off the top the full page keeps, to scroll back through: some 5 MB of xterm's buffer at most. */
 export const SCROLLBACK = 5000;
 
 /**
- * The options its xterm is made with.
+ * How much of a finished output the page shows, in UTF-16 code units: about
+ * 256 KiB, more than servers keep of a terminal's output (64 KiB on
+ * apron-server-go), as apron-web's `TERMINAL_FEED_KEEP`.
+ */
+export const OUTPUT_KEEP = 256 * 1024;
+
+/**
+ * The last `limit` code units of `text`, cut as the server cuts a terminal's
+ * output (`keep_last`, §4.8.6): from its first control character (below
+ * U+0020), or, with none, from its first whole character.
+ * @param {string} text
+ * @param {number} limit
+ */
+export function keepLast(text, limit) {
+	if (text.length <= limit) return text;
+	const tail = text.slice(-limit);
+	for (let i = 0; i < tail.length; i++) if (tail.charCodeAt(i) < 0x20) return tail.slice(i);
+	const first = tail.charCodeAt(0);
+	return first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail;
+}
+
+/**
+ * The options its xterm is made with; `scrollback`, the lines it keeps above the screen.
  * @param {ITheme} theme
  * @param {string} fontFamily
  * @param {number} fontSize
+ * @param {number} [scrollback]
  * @returns {TerminalOptions}
  */
-export function terminalOptions(theme, fontFamily, fontSize) {
+export function terminalOptions(theme, fontFamily, fontSize, scrollback = 0) {
 	return {
 		cols: TERMINAL_COLS,
 		rows: TERMINAL_ROWS,
@@ -50,7 +83,7 @@ export function terminalOptions(theme, fontFamily, fontSize) {
 		cursorInactiveStyle: 'none',
 		// Output piped without a pseudo-terminal ends lines with a bare line feed, which a terminal's driver would turn into CR LF.
 		convertEol: true,
-		scrollback: SCROLLBACK,
+		scrollback,
 		// OSC 8 links are shown, never opened.
 		linkHandler: { activate: () => {}, allowNonHttpProtocols: false },
 		// No window manipulation or reports (the default, stated).
@@ -97,19 +130,20 @@ export function terminalTheme(element) {
 }
 
 /**
- * The size that fits the 80 columns in `width` pixels and the 40 rows in
- * `height`, the rows down to `FONT_ROWS_MIN`, in quarter pixels, between
- * `FONT_MIN` and `FONT_MAX`. `ratio` is the face's advance and `line` its row
- * height, per pixel of size.
+ * The size that fits the 80 columns in `width` pixels (and, for a fit with
+ * `rows`, the 40 rows in `height`, down to that size), in quarter pixels,
+ * between the fit's smallest and largest. `ratio` is the face's advance and
+ * `line` its row height, per pixel of size.
  * @param {number} width
  * @param {number} ratio
+ * @param {TerminalFit} [fit]
  * @param {number} [height]
  * @param {number} [line]
  */
-export function terminalFontSize(width, ratio, height = Infinity, line = 1.2) {
+export function terminalFontSize(width, ratio, fit = INLINE_FIT, height = Infinity, line = 1.2) {
 	let size = width / (TERMINAL_COLS * ratio);
-	size = Math.min(size, Math.max(FONT_ROWS_MIN, height / (TERMINAL_ROWS * line)));
-	return Math.max(FONT_MIN, Math.min(FONT_MAX, Math.floor(size * 4) / 4));
+	if (fit.rows !== undefined) size = Math.min(size, Math.max(fit.rows, height / (TERMINAL_ROWS * line)));
+	return Math.max(fit.min, Math.min(fit.max, Math.floor(size * 4) / 4));
 }
 
 /**
@@ -132,6 +166,9 @@ export function shownRows(buffer) {
 /** Full reset (RIS): the initial state of a terminal. */
 const RESET = '\u001bc';
 
+/** Pointer gestures that scroll: without scrollback, the page's, never the terminal's, which has nothing to scroll. */
+const SCROLLS = /** @type {const} */ (['wheel', 'touchstart', 'touchmove']);
+
 /** The keys that scroll, in lines (a page is the rows in view less one; ±Infinity, all the way). */
 /** @type {Record<string, number | 'page'>} */
 const SCROLL_KEYS = { ArrowUp: -1, ArrowDown: 1, PageUp: 'page', PageDown: 'page', Home: -Infinity, End: Infinity };
@@ -147,10 +184,22 @@ function faceRatios(/** @type {HTMLElement} */ host, /** @type {string} */ fontF
 	return { advance: width > 0 ? width / 40 / 100 : 0.6, line: height > 0 ? height / 100 : 1.2 };
 }
 
+/**
+ * How a `TerminalScreen` is made.
+ * @typedef {object} TerminalScreenOptions
+ * @property {HTMLElement} [space] the box whose content area is the space to fit; the host unless said
+ * @property {TerminalFit} [fit] how its font fits; INLINE_FIT unless said
+ * @property {number} [scrollback] the lines it keeps that scroll off the top, 0 unless said. With some, a wheel, a
+ *   vertical swipe or a key (on `keys`) over the space scrolls through them and the screen as one (`scrollBy`).
+ * @property {HTMLElement | Document} [keys] where its scrolling keys are read, with scrollback
+ */
+
 export class TerminalScreen {
 	/** @type {HTMLElement} */ #host;
 	/** @type {HTMLElement} */ #space;
-	/** @type {HTMLElement | Document} */ #keys;
+	/** @type {HTMLElement | Document | undefined} */ #keys;
+	/** @type {TerminalFit} */ #fitting;
+	/** @type {number} */ #scrollback;
 	/** @type {Terminal} */ #terminal;
 	/** @type {number | undefined} */ #frame;
 	/** @type {ResizeObserver | undefined} */ #observer;
@@ -161,27 +210,27 @@ export class TerminalScreen {
 	#owed = 0;
 	/** @type {number | undefined} Where a one-finger swipe last was. */
 	#touchY;
-	/** Whether the space is scrolled to the screen's foot, where the newest line is: it stays there. */
+	/** With scrollback, whether the space is scrolled to the screen's foot, where the newest line is: it stays there. */
 	#atFoot = true;
 	#disposed = false;
+	#keep = (/** @type {Event} */ event) => event.stopPropagation();
 
 	/**
-	 * Mounts a terminal in `host`, a box in `space` (which scrolls when the
-	 * screen is larger than it), fitted to `space`. Arrow keys, Page Up and
-	 * Down, Home and End on `keys` scroll it.
+	 * Mounts a terminal in `host`, a box the page sizes, fitted to `options.space`.
 	 * @param {TerminalClass} Terminal
 	 * @param {HTMLElement} host
-	 * @param {HTMLElement} space
-	 * @param {HTMLElement | Document} keys
+	 * @param {TerminalScreenOptions} [options]
 	 */
-	constructor(Terminal, host, space, keys) {
+	constructor(Terminal, host, { space = host, fit = INLINE_FIT, scrollback = 0, keys } = {}) {
 		this.#host = host;
 		this.#space = space;
+		this.#fitting = fit;
+		this.#scrollback = scrollback;
 		this.#keys = keys;
 		const fontFamily = getComputedStyle(host).getPropertyValue('--font-mono').trim() || 'monospace';
 		({ advance: this.#ratio, line: this.#line } = faceRatios(host, fontFamily));
 		const room = this.#room();
-		const terminal = new Terminal(terminalOptions(terminalTheme(host), fontFamily, terminalFontSize(room.width, this.#ratio, room.height, this.#line)));
+		const terminal = new Terminal(terminalOptions(terminalTheme(host), fontFamily, terminalFontSize(room.width, this.#ratio, fit, room.height, this.#line), scrollback));
 		// Swallowed, not acted on: window titles (OSC 0, 1, 2) and the clipboard (OSC 52).
 		for (const osc of [0, 1, 2, 52]) terminal.parser.registerOscHandler(osc, () => true);
 		// No key is xterm's once a click has focused it: the arrows and Page Up reach the page, and copying is the browser's.
@@ -198,13 +247,15 @@ export class TerminalScreen {
 		terminal.buffer.onBufferChange(() => this.#schedule());
 		this.#terminal = terminal;
 
-		// One scroll for the lines kept and the space (`scrollBy`), read before xterm's own. Sideways is the space's.
-		space.addEventListener('wheel', this.#wheel, { capture: true, passive: false });
-		space.addEventListener('touchstart', this.#touchstart, { capture: true, passive: true });
-		space.addEventListener('touchmove', this.#touchmove, { capture: true, passive: true });
-		space.addEventListener('scroll', this.#scrolled, { passive: true });
-		space.style.touchAction = 'pan-x pinch-zoom';
-		keys.addEventListener('keydown', /** @type {EventListener} */ (this.#keydown));
+		if (scrollback > 0) {
+			// One scroll for the lines kept and the space (`scrollBy`), read before xterm's own. Sideways is the space's.
+			space.addEventListener('wheel', this.#wheel, { capture: true, passive: false });
+			space.addEventListener('touchstart', this.#touchstart, { capture: true, passive: true });
+			space.addEventListener('touchmove', this.#touchmove, { capture: true, passive: true });
+			space.addEventListener('scroll', this.#scrolled, { passive: true });
+			space.style.touchAction = 'pan-x pinch-zoom';
+			keys?.addEventListener('keydown', /** @type {EventListener} */ (this.#keydown));
+		} else for (const type of SCROLLS) host.addEventListener(type, this.#keep, { capture: true, passive: true });
 		if (typeof ResizeObserver === 'function') {
 			this.#observer = new ResizeObserver(() => this.#fit());
 			this.#observer.observe(space);
@@ -229,6 +280,15 @@ export class TerminalScreen {
 	 */
 	write(text) {
 		if (!this.#disposed && text) this.#terminal.write(text);
+	}
+
+	/**
+	 * Shows `output` from a fresh terminal, such as a finished embed's.
+	 * @param {string} output
+	 */
+	show(output) {
+		this.reset();
+		this.write(output);
 	}
 
 	/** The text on the screen and the lines kept above it, as plain text, for Copy. */
@@ -287,12 +347,13 @@ export class TerminalScreen {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		const space = this.#space;
+		for (const type of SCROLLS) this.#host.removeEventListener(type, this.#keep, { capture: true });
 		space.removeEventListener('wheel', this.#wheel, { capture: true });
 		space.removeEventListener('touchstart', this.#touchstart, { capture: true });
 		space.removeEventListener('touchmove', this.#touchmove, { capture: true });
 		space.removeEventListener('scroll', this.#scrolled);
-		space.style.touchAction = '';
-		this.#keys.removeEventListener('keydown', /** @type {EventListener} */ (this.#keydown));
+		if (this.#scrollback > 0) space.style.touchAction = '';
+		this.#keys?.removeEventListener('keydown', /** @type {EventListener} */ (this.#keydown));
 		this.#observer?.disconnect();
 		this.#unwatchTheme();
 		if (this.#frame !== undefined) cancelAnimationFrame(this.#frame);
@@ -310,20 +371,21 @@ export class TerminalScreen {
 		};
 	}
 
-	/** The font that fits the space; checked against what xterm drew, as faces round. */
+	/** The font that fits the space (`TerminalFit`); checked against what xterm drew, as faces round. */
 	#fit() {
 		if (this.#disposed) return;
 		const terminal = this.#terminal;
+		const fit = this.#fitting;
 		const { width, height } = this.#room();
 		if (!width) return;
-		let size = terminalFontSize(width, this.#ratio, height, this.#line);
+		let size = terminalFontSize(width, this.#ratio, fit, height, this.#line);
 		if (terminal.options.fontSize !== size) terminal.options.fontSize = size;
 		const drawn = this.#screenElement()?.getBoundingClientRect();
 		if (drawn) {
 			let fits = size;
 			if (drawn.width > width) fits = size * (width / drawn.width);
-			if (height && drawn.height > height) fits = Math.min(fits, Math.max(FONT_ROWS_MIN, size * (height / drawn.height)));
-			fits = Math.max(FONT_MIN, Math.floor(fits * 4) / 4);
+			if (fit.rows !== undefined && height && drawn.height > height) fits = Math.min(fits, Math.max(fit.rows, size * (height / drawn.height)));
+			fits = Math.max(fit.min, Math.floor(fits * 4) / 4);
 			if (fits < size) terminal.options.fontSize = size = fits;
 		}
 		this.#host.dataset.fontSize = String(terminal.options.fontSize);
@@ -345,8 +407,8 @@ export class TerminalScreen {
 			const rowHeight = screen.getBoundingClientRect().height / TERMINAL_ROWS;
 			this.#host.style.height = `${Math.ceil(rows * rowHeight)}px`;
 			this.#host.dataset.rows = String(rows);
-			// At the screen's foot (the newest line), as it opens, the space stays there as the screen grows.
-			if (this.#atFoot) this.#space.scrollTop = this.#space.scrollHeight;
+			// With scrollback, a space at the screen's foot (the newest line) stays there as the screen grows.
+			if (this.#scrollback > 0 && this.#atFoot) this.#space.scrollTop = this.#space.scrollHeight;
 		});
 	}
 
@@ -407,11 +469,16 @@ export class TerminalScreen {
 }
 
 /**
- * Calls `changed` when the system's light or dark changes.
+ * Calls `changed` when the theme changes: the page's `data-theme`, or the system's light or dark.
  * @param {() => void} changed
  */
 function watchTheme(changed) {
+	const observer = new MutationObserver(changed);
+	observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 	const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: light)') : undefined;
 	query?.addEventListener('change', changed);
-	return () => query?.removeEventListener('change', changed);
+	return () => {
+		observer.disconnect();
+		query?.removeEventListener('change', changed);
+	};
 }

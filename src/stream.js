@@ -1,28 +1,37 @@
 // @ts-check
 /**
- * Reads the page's own address: which terminal stream to show.
+ * Reads the page's own address: which terminal stream to show, and how.
  *
- *   https://terminal.apron.chat/#stream=<url>&title=<title>
+ *   https://terminal.apron.chat/#stream=<url>&title=<title>&embed=1&theme=dark
  *
- * `stream` is the `url` of a `terminal` embed (PROTOCOL.md §4.8.6), the live
- * text a chat server serves. Percent-encode it when it has a `&`, `#`, `+` or
- * `%` of its own. `title` is optional: the embed's `title`, such as the
- * command. A repeated key counts with its first value.
+ * - `stream` is the `url` of a `terminal` embed (PROTOCOL.md §4.8.6), the
+ *   live text a chat server serves. Percent-encode it when it has a `&`, `#`,
+ *   `+` or `%` of its own. Optional with `embed=1`, for a client that only
+ *   sends a finished `output` in (see README.md, Embedding).
+ * - `title` is optional: the embed's `title`, such as the command.
+ * - `embed=1` shows the compact layout for an iframe in a chat message. A
+ *   page in a frame shows it anyway.
+ * - `theme` is `light` or `dark`, to match the client's; the system's unless
+ *   said.
  *
- * The keys belong in the fragment, so the stream's address, which anyone who
- * has it can read, never reaches this site's host.
+ * A repeated key counts with its first value. The keys belong in the
+ * fragment, so the stream's address, which anyone who has it can read, never
+ * reaches this site's host.
  */
 
 /** @typedef {'no-stream' | 'bad-stream' | 'insecure-stream' | 'credentials-in-stream' | 'exposed-stream'} Reason */
 
 /**
- * @typedef {object} Stream
- * @property {string} url the address to read, as the URL parser writes it
- * @property {string} host where it is read from, to show
+ * What the page shows.
+ * @typedef {object} View
+ * @property {string} [url] the stream's address, as the URL parser writes it; absent only in an embed
+ * @property {string} [host] where the stream is read from, to show
  * @property {string} [title] what it is, such as the command that writes it
+ * @property {boolean} embed the compact layout, for an iframe
+ * @property {'light' | 'dark'} [theme] the client's theme
  */
 
-/** @typedef {{ kind: 'empty' } | { kind: 'invalid', reason: Reason } | { kind: 'stream', stream: Stream }} Parsed */
+/** @typedef {{ kind: 'empty' } | { kind: 'invalid', reason: Reason, embed: boolean, theme?: 'light' | 'dark' } | { kind: 'view', view: View }} Parsed */
 
 /** The longest title shown, in code points. Longer ones are cut, with an ellipsis. */
 export const MAX_TITLE = 120;
@@ -33,9 +42,10 @@ export const MAX_TITLE = 120;
  * @returns {Parsed}
  */
 export function parseLocation(location) {
+	const params = new URLSearchParams(location.hash.replace(/^#/, ''));
 	// The stream's address is a credential to read it: in the query, it has already reached this site's host.
-	if (new URLSearchParams(location.search).has('stream')) return { kind: 'invalid', reason: 'exposed-stream' };
-	return parseParams(new URLSearchParams(location.hash.replace(/^#/, '')));
+	if (new URLSearchParams(location.search).has('stream')) return { kind: 'invalid', reason: 'exposed-stream', ...look(params) };
+	return parseParams(params);
 }
 
 /**
@@ -46,12 +56,26 @@ export function parseLocation(location) {
  */
 export function parseParams(params) {
 	if ([...params.keys()].length === 0) return { kind: 'empty' };
-	const value = params.get('stream');
-	if (value === null || value.trim() === '') return { kind: 'invalid', reason: 'no-stream' };
-	const checked = checkStreamUrl(value);
-	if (typeof checked === 'string') return { kind: 'invalid', reason: checked };
+	const shown = look(params);
 	const title = cleanTitle(params.get('title') ?? '');
-	return { kind: 'stream', stream: { url: checked.toString(), host: checked.host, ...(title ? { title } : {}) } };
+	const value = params.get('stream');
+	if (value === null || value.trim() === '') {
+		if (shown.embed) return { kind: 'view', view: { ...shown, ...(title ? { title } : {}) } };
+		return { kind: 'invalid', reason: 'no-stream', ...shown };
+	}
+	const checked = checkStreamUrl(value);
+	if (typeof checked === 'string') return { kind: 'invalid', reason: checked, ...shown };
+	return { kind: 'view', view: { url: checked.toString(), host: checked.host, ...(title ? { title } : {}), ...shown } };
+}
+
+/**
+ * How the page looks: `embed` and `theme`.
+ * @param {URLSearchParams} params
+ * @returns {{ embed: boolean, theme?: 'light' | 'dark' }}
+ */
+function look(params) {
+	const theme = params.get('theme');
+	return { embed: params.get('embed') === '1', ...(theme === 'light' || theme === 'dark' ? { theme } : {}) };
 }
 
 /**
@@ -94,18 +118,24 @@ export function isLoopback(hostname) {
  */
 export function cleanTitle(title) {
 	// eslint-disable-next-line no-control-regex
-	const text = title.replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]+/g, ' ').replace(/\s+/g, ' ').trim();
+	const text = title.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]+/g, ' ').replace(/\s+/g, ' ').trim();
 	const points = [...text];
 	return points.length > MAX_TITLE ? `${points.slice(0, MAX_TITLE - 1).join('').trimEnd()}…` : text;
 }
 
 /**
- * The address of the page that shows `stream`: the inverse of `parseLocation`.
+ * The address of the page that shows a stream: the inverse of `parseLocation`.
  * @param {string} origin this site's origin, such as `https://terminal.apron.chat`
- * @param {{ url: string, title?: string }} stream
+ * @param {{ url?: string, title?: string, embed?: boolean, theme?: 'light' | 'dark' }} view
  */
-export function viewerUrl(origin, { url, title }) {
+export function viewerUrl(origin, { url, title, embed, theme }) {
 	// Encoded as a component, but with `:` and `/` left readable: neither means anything in a fragment's keys.
 	const encode = (/** @type {string} */ value) => encodeURIComponent(value).replace(/%3A/gi, ':').replace(/%2F/gi, '/');
-	return `${origin}/#stream=${encode(url)}${title ? `&title=${encode(title)}` : ''}`;
+	/** @type {string[]} */
+	const keys = [];
+	if (url) keys.push(`stream=${encode(url)}`);
+	if (title) keys.push(`title=${encode(title)}`);
+	if (embed) keys.push('embed=1');
+	if (theme) keys.push(`theme=${theme}`);
+	return `${origin}/#${keys.join('&')}`;
 }
